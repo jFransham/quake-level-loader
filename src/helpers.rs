@@ -1,4 +1,4 @@
-use nom::{GetOutput,IResult,le_i32,le_u32,le_u64};
+use nom::{IResult,le_i32,le_u32};
 use nom::IResult::*;
 use std::mem::transmute;
 
@@ -9,7 +9,7 @@ pub type IVec2 = [i32; 2];
 pub type Rgb = [u8; 3];
 pub type Rgba = [u8; 4];
 
-/// Recognizes big endian 4 bytes floating point number
+/// Recognizes little endian 4 bytes floating point number
 #[inline]
 pub fn le_f32(input: &[u8]) -> IResult<&[u8], f32> {
   match le_u32(input) {
@@ -23,31 +23,15 @@ pub fn le_f32(input: &[u8]) -> IResult<&[u8], f32> {
   }
 }
 
-/// Recognizes big endian 8 bytes floating point number
-#[inline]
-pub fn le_f64(input: &[u8]) -> IResult<&[u8], f64> {
-  match le_u64(input) {
-    Error(e)      => Error(e),
-    Incomplete(e) => Incomplete(e),
-    Done(i,o) => {
-      unsafe {
-        Done(i, transmute::<u64, f64>(o))
-      }
-    }
-  }
-}
-
-pub fn parse_vec<T, F: ?Sized>(
+pub fn parse_vec<T>(
     input: &[u8],
-    fun: Box<F>,
+    fun: fn(&[u8]) -> IResult<&[u8], T>,
     count: usize
-) -> IResult<&[u8], Vec<T>>
-    where F: Fn(&[u8]) -> IResult<&[u8], T>
-{
+) -> IResult<&[u8], Vec<T>> {
     let mut output = Vec::with_capacity(count);
     let mut bytes: &[u8] = input;
-    for i in 0..count {
-        let (rest, result) = itry!((*fun)(bytes));
+    for _ in 0..count {
+        let (rest, result) = itry!(fun(bytes));
         bytes = rest;
         output.push(result);
     }
@@ -99,8 +83,4 @@ named! {
             [v0, v1]
         }
     )
-}
-
-fn parse_name(i: &[u8]) -> IResult<&[u8], [u8; 64]> {
-    take_exact!(i, 64)
 }

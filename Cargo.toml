@@ -5,5 +5,3 @@ authors = ["Jack Fransham <jack.fransham@cuvva.co>"]
 
 [dependencies]
 nom = "^1.0.1"
-byteorder = "^0.4.2"
-lazysort = "^0.1.0"

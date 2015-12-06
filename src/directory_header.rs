@@ -1,10 +1,12 @@
-use nom::{GetOutput,IResult,le_i32};
+use nom::{IResult,le_i32};
 
+#[derive(Debug)]
 pub struct DirectoryEntry {
     pub offset: i32,
     pub size: i32,
 }
 
+#[derive(Debug)]
 pub struct DirectoryHeader {
     pub version: i32,
     pub entities: DirectoryEntry,

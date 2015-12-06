@@ -8,6 +8,7 @@ macro_rules! itry {
                 return Error(e)
             },
             Incomplete(needed) => {
+                println!("Incomplete at {}, {}", line!(), file!());
                 return Incomplete(needed)
             }
         }
@@ -16,14 +17,26 @@ macro_rules! itry {
 
 macro_rules! get_from_header {
     ($bytes:expr, $field:expr, $fun:expr, $t:ty) => {{
+        use std::mem::size_of;
+        get_from_header!($bytes, $field, $fun, $t, size_of::<$t>())
+    }};
+    ($bytes:expr, $field:expr, $fun:expr, $t:ty, $size:expr) => {{
         let start = $field.offset as usize;
         let end = ($field.offset + $field.size) as usize;
         let slice = &$bytes[start..end];
+        println!("Number of {}: {} ({}b each) in section {}-{} ({}b)",
+            stringify!($t),
+            $field.size as usize / $size,
+            $size,
+            start,
+            end,
+            slice.len()
+        );
         itry!(
-            parse_vec::<$t, _>(
+            parse_vec::<$t>(
                 slice,
                 $fun,
-                $field.size as usize / std::mem::size_of::<$t>()
+                $field.size as usize / $size
             )
         )
     }}
@@ -44,7 +57,8 @@ macro_rules! take_s {
                         s
                     )
                 } else {
-                    Error(Err::Code(nom::ErrorKind::Custom(0)))
+                    use nom::ErrorKind;
+                    Error(Err::Code(ErrorKind::Custom(0)))
                 },
             Error(e) => {
                 Error(e)
