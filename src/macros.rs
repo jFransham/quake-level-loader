@@ -20,7 +20,7 @@ macro_rules! get_from_header {
         let end = ($field.offset + $field.size) as usize;
         let slice = &$bytes[start..end];
         itry!(
-            parse_vec::<$t>(
+            parse_vec::<$t, _>(
                 slice,
                 $fun,
                 $field.size as usize / std::mem::size_of::<$t>()
@@ -37,7 +37,7 @@ macro_rules! take_s {
         match take!($i, $count) {
             Done(rest, arr) =>
                 if let Ok(s) = String::from_utf8(
-                    arr.into_iter().map(|a| *a).collect::<Vec<_>>()
+                    arr.into_iter().map(|&a| a).collect::<Vec<_>>()
                 ) {
                     Done(
                         rest,

@@ -37,15 +37,17 @@ pub fn le_f64(input: &[u8]) -> IResult<&[u8], f64> {
   }
 }
 
-pub fn parse_vec<T>(
+pub fn parse_vec<T, F: ?Sized>(
     input: &[u8],
-    fun: fn(&[u8]) -> IResult<&[u8], T>,
+    fun: Box<F>,
     count: usize
-) -> IResult<&[u8], Vec<T>> {
+) -> IResult<&[u8], Vec<T>>
+    where F: Fn(&[u8]) -> IResult<&[u8], T>
+{
     let mut output = Vec::with_capacity(count);
     let mut bytes: &[u8] = input;
     for i in 0..count {
-        let (rest, result) = itry!(fun(bytes));
+        let (rest, result) = itry!((*fun)(bytes));
         bytes = rest;
         output.push(result);
     }

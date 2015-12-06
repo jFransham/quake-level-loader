@@ -18,7 +18,7 @@ pub struct DirectoryHeader {
     pub brushes: DirectoryEntry,
     pub brush_sides: DirectoryEntry,
     pub vertices: DirectoryEntry,
-    pub mesh_verts: DirectoryEntry,
+    pub mesh_vertices: DirectoryEntry,
     pub effects: DirectoryEntry,
     pub faces: DirectoryEntry,
     pub light_maps: DirectoryEntry,
@@ -54,7 +54,7 @@ pub fn directory_header(i: &[u8]) -> IResult<&[u8], DirectoryHeader> {
         brushes:         directory_entry ~
         brush_sides:     directory_entry ~
         vertices:        directory_entry ~
-        mesh_verts:      directory_entry ~
+        mesh_vertices:      directory_entry ~
         effects:         directory_entry ~
         faces:           directory_entry ~
         light_maps:      directory_entry ~
@@ -74,7 +74,7 @@ pub fn directory_header(i: &[u8]) -> IResult<&[u8], DirectoryHeader> {
                 brushes: brushes,
                 brush_sides: brush_sides,
                 vertices: vertices,
-                mesh_verts: mesh_verts,
+                mesh_vertices: mesh_vertices,
                 effects: effects,
                 faces: faces,
                 light_maps: light_maps,

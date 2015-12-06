@@ -1,3 +1,6 @@
+use helpers::*;
+use directory_header::*;
+
 pub struct RawBsp {
     pub header: DirectoryHeader,
     pub entities: String,
@@ -94,13 +97,6 @@ pub struct Vertex {
 }
 
 #[repr(C)]
-pub struct Vertex {
-    pub position: Vec3,
-    pub surface_coords: Vec2,
-    pub lightmap_coords: Vec2,
-    pub normal: Vec3,
-    pub color: [u8; 4],
-}
 pub struct RawMeshVert {
     pub offset: i32,
 }
