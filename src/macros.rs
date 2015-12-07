@@ -8,7 +8,6 @@ macro_rules! itry {
                 return Error(e)
             },
             Incomplete(needed) => {
-                println!("Incomplete at {}, {}", line!(), file!());
                 return Incomplete(needed)
             }
         }
@@ -24,16 +23,6 @@ macro_rules! get_from_header {
         let start = $field.offset as usize;
         let end = ($field.offset + $field.size) as usize;
         let slice = &$bytes[start..end];
-        /*
-        println!("Number of {}: {} ({}b each) in section {}-{} ({}b)",
-            stringify!($t),
-            $field.size as usize / $size,
-            $size,
-            start,
-            end,
-            slice.len()
-        );
-        */
         itry!(
             parse_vec::<$t>(
                 slice,
