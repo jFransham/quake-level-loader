@@ -2,6 +2,8 @@
 
 #[macro_use]
 extern crate nom;
+#[macro_use]
+extern crate bitflags;
 extern crate test;
 
 #[macro_use]
@@ -9,6 +11,7 @@ mod macros;
 mod raw_bsp;
 mod raw_bsp_parsers;
 mod directory_header;
+mod texture_flags;
 mod helpers;
 
 use nom::IResult::*;
@@ -27,7 +30,7 @@ pub const TRESPASS: &'static [u8] = include_bytes!(
 
 fn main() {
     match parse_raw_bsp(TRESPASS) {
-        Done(_, bsp) => println!("Success! Entities =\n{:#?}", bsp.entities),
+        Done(_, bsp) => println!("Success! Entities =\n{:#?}", bsp.textures),
         Incomplete(n) => println!("Incomplete: {:?}", n),
         Error(_)   => println!("Failed :("),
     }

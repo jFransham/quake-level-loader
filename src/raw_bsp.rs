@@ -1,6 +1,7 @@
 use helpers::*;
 use directory_header::*;
 use std::collections::HashMap;
+use texture_flags::*;
 
 #[derive(Debug)]
 pub struct Entity {
@@ -41,10 +42,11 @@ pub struct RawBsp {
     pub visibility_data: Vec<RawVisibilityData>,
 }
 
+#[derive(Debug)]
 pub struct Texture {
     pub name: String,
-    pub flags: i32,
-    pub contents: i32,
+    pub surface_flags: SurfaceFlags,
+    pub content_flags: ContentFlags,
 }
 
 pub struct Plane {

@@ -1,9 +1,10 @@
-use nom::{IResult,le_i32,le_u8};
+use nom::{IResult,le_u32,le_i32,le_u8};
 use nom::Err;
 use nom::IResult::*;
 use directory_header::*;
 use helpers::*;
 use raw_bsp::*;
+use texture_flags::*;
 use std::str::from_utf8;
 
 named! {
@@ -102,14 +103,18 @@ fn parse_entity(i: &[u8]) -> IResult<&[u8], Entity> {
 named! {
     parse_texture<Texture>,
     chain!(
-        name:     take_s!(64) ~
-        flags:    le_i32      ~
-        contents: le_i32      ,
+        name:          take_s!(64) ~
+        surface_flags: le_u32      ~
+        content_flags: le_u32      ,
         || {
             Texture {
                 name: name,
-                flags: flags,
-                contents: contents,
+                surface_flags: SurfaceFlags::from_bits_truncate(
+                    surface_flags
+                ),
+                content_flags: ContentFlags::from_bits_truncate(
+                    content_flags
+                ),
             }
         }
     )
