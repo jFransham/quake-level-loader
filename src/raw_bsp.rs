@@ -1,9 +1,28 @@
 use helpers::*;
 use directory_header::*;
+use std::collections::HashMap;
+
+#[derive(Debug)]
+pub struct Entity {
+    pub parameters: HashMap<String, EntityValue>,
+}
+
+#[derive(Debug)]
+pub enum EntityValue {
+    Text(String),
+    Vec3(Vec3),
+    IVec3(IVec3),
+    Vec2(Vec2),
+    IVec2(IVec2),
+    Float(f32),
+    Int(i32),
+    ModelRef(i32),
+    TargetRef(i32),
+}
 
 pub struct RawBsp {
     pub header: DirectoryHeader,
-    pub entities: String,
+    pub entities: Vec<Entity>,
     pub textures: Vec<Texture>,
     pub planes: Vec<Plane>,
     pub nodes: Vec<RawNode>,

@@ -27,7 +27,7 @@ pub const TRESPASS: &'static [u8] = include_bytes!(
 
 fn main() {
     match parse_raw_bsp(TRESPASS) {
-        Done(_, bsp) => println!("Success! Entities =\n{}", bsp.entities),
+        Done(_, bsp) => println!("Success! Entities =\n{:#?}", bsp.entities),
         Incomplete(n) => println!("Incomplete: {:?}", n),
         Error(_)   => println!("Failed :("),
     }

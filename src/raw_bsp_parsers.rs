@@ -7,6 +7,112 @@ use raw_bsp::*;
 use std::str::from_utf8;
 
 named! {
+    parse_entity_value <EntityValue>,
+    alt!(
+        chain!(
+                       tag!(b"*")    ~
+            reference: parse_str_int ,
+            || {
+                EntityValue::ModelRef(reference)
+            }
+        ) |
+        chain!(
+                       tag!(b"t")    ~
+            reference: parse_str_int ,
+            || {
+                EntityValue::TargetRef(reference)
+            }
+        ) |
+        chain!(
+            first: parse_str_int        ~
+                   mandatory_whitespace ~
+            secnd: parse_str_int        ~
+                   mandatory_whitespace ~
+            third: parse_str_int        ~
+                   whitespace ,
+            || { EntityValue::IVec3([first, secnd, third]) }
+        ) |
+        chain!(
+            first: parse_str_float      ~
+                   mandatory_whitespace  ~
+            secnd: parse_str_float      ~
+                   mandatory_whitespace  ~
+            third: parse_str_float      ~
+                   whitespace  ,
+            || { EntityValue::Vec3([first, secnd, third]) }
+        ) |
+        chain!(
+            first: parse_str_int        ~
+                   mandatory_whitespace ~
+            secnd: parse_str_int        ~
+                   whitespace ,
+            || { EntityValue::IVec2([first, secnd]) }
+        ) |
+        chain!(
+            first: parse_str_float      ~
+                   mandatory_whitespace ~
+            secnd: parse_str_float      ~
+                   whitespace ,
+            || { EntityValue::Vec2([first, secnd]) }
+        ) |
+        map!(
+            parse_str_int,
+            EntityValue::Int
+        ) |
+        map!(
+            parse_str_float,
+            EntityValue::Float
+        ) |
+        map!(
+            take_s_until!("\""),
+            EntityValue::Text
+        )
+    )
+}
+
+fn parse_entity(i: &[u8]) -> IResult<&[u8], Entity> {
+    use nom::{Err, ErrorKind};
+
+    let (rest, keyvals) = itry!(
+        chain!(i,
+                    whitespace ~
+                    char!('{')  ~
+                    whitespace  ~
+            params: many0!(
+                chain!(
+                           char!('\"')        ~
+                    name:  take_s_until!("\"")  ~
+                           char!('\"')        ~
+                           whitespace         ~
+                           char!('\"')        ~
+                    value: parse_entity_value ~
+                           char!('\"')        ~
+                           whitespace         ,
+                    || { (name, value) }
+                )
+            )                   ~
+                    char!('}')  ,
+            || {
+                params
+            }
+        )
+    );
+
+    fn byte_arrays_and_val_to_entity(
+        v: Vec<(String, EntityValue)>
+    ) -> Entity {
+        Entity {
+            parameters: v.into_iter().collect()
+        }
+    }
+
+    Done(
+        rest,
+        byte_arrays_and_val_to_entity(keyvals)
+    )
+}
+
+named! {
     parse_texture<Texture>,
     chain!(
         name:     take_s!(64) ~
@@ -268,7 +374,8 @@ fn parse_visibility_data(i: &[u8]) -> IResult<&[u8], RawVisibilityData> {
         }
     );
 
-    let (rest, raw) = itry!(take!(rest, num_vectors * sizeof_vector));
+    let size = num_vectors * sizeof_vector;
+    let (rest, raw) = itry!(take!(rest, size));
 
     Done(rest, RawVisibilityData {
         num_vectors: num_vectors,
@@ -322,13 +429,11 @@ named! {
 
 pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
     let (_, header) = itry!(directory_header(i));
-    let (_, entities) = {
-        let start = header.entities.offset as usize;
-        let end = start + header.entities.size as usize;
-        itry!(
-            take_s!(&i[start..end], header.entities.size)
-        )
-    };
+    let (_, entities) = many1_from_header!(i,
+        header.entities,
+        parse_entity,
+        Entity
+    );
     let (_, textures) = get_from_header!(i,
         header.textures,
         parse_texture,
@@ -406,7 +511,7 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
         parse_light_volume,
         LightVolume
     );
-    let (_, visibility_data) = get_from_header!(i,
+    let (_, visibility_data) = many1_from_header!(i,
         header.visibility_data,
         parse_visibility_data,
         RawVisibilityData

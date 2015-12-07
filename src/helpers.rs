@@ -1,5 +1,6 @@
 use nom::{IResult,le_i32,le_u32};
 use nom::IResult::*;
+use nom::Err;
 use std::mem::transmute;
 
 pub type Vec3 = [f32; 3];
@@ -83,4 +84,102 @@ named! {
             [v0, v1]
         }
     )
+}
+
+named! {
+    pub whitespace <()>,
+    chain!(
+        many0!(
+            alt!(
+                tag!(b"\n") |
+                tag!(b"\t") |
+                tag!(b"\r") |
+                tag!(b" ")
+            )
+        ) ,
+        || { () }
+    )
+}
+
+named! {
+    pub mandatory_whitespace <()>,
+    chain!(
+        many1!(
+            alt!(
+                tag!(b"\n") |
+                tag!(b"\t") |
+                tag!(b"\r") |
+                tag!(b" ")
+            )
+        ) ,
+        || { () }
+    )
+}
+
+pub fn parse_str_float(i: &[u8]) -> IResult<&[u8], f32> {
+    use nom::ErrorKind;
+
+    fn is_dec(a: u8) -> bool {
+        let c = a as char;
+        c.is_digit(10)
+    }
+
+    let (rest, neg) = itry!(opt!(i, tag!(b"-")));
+    let (rest, pre_dot) = itry!(take_while1!(rest, is_dec));
+    let (rest, maybe_dot_and_num) = itry!(
+        opt!(rest,
+            chain!(
+                a: tag!(b".")           ~
+                b: take_while1!(is_dec) ,
+                || {
+                    a.into_iter().chain(b.into_iter())
+                }
+            )
+        )
+    );
+
+    if let Ok(Ok(float)) = String::from_utf8(
+        neg.into_iter()
+            .flat_map(|a| a.into_iter())
+            .chain(pre_dot.into_iter())
+            .chain(maybe_dot_and_num.into_iter().flat_map(|a| a))
+            .map(|&a| a)
+            .take_while(|&c| c != 0)
+            .collect::<Vec<_>>()
+    ).map(|s| s.parse()) {
+        Done(
+            rest,
+            float
+        )
+    } else {
+        Error(Err::Code(ErrorKind::Custom(0)))
+    }
+}
+
+pub fn parse_str_int(i: &[u8]) -> IResult<&[u8], i32> {
+    use nom::ErrorKind;
+
+    fn is_dec(a: u8) -> bool {
+        let c = a as char;
+        c.is_digit(10)
+    }
+
+    let (rest, neg) = itry!(opt!(i, tag!(b"-")));
+    let (rest, i_bytes) = itry!(take_while1!(rest, is_dec));
+
+    if let Ok(Ok(int)) = String::from_utf8(
+        neg.into_iter()
+            .flat_map(|a| a.into_iter())
+            .chain(i_bytes.into_iter())
+            .map(|&a| a)
+            .take_while(|&c| c != 0)
+            .collect::<Vec<_>>()
+    ).map(|s| s.parse()) {
+        Done(
+            rest,
+            int
+        )
+    } else {
+        Error(Err::Code(ErrorKind::Custom(0)))
+    }
 }
