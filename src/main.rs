@@ -21,10 +21,13 @@ use raw_bsp_parsers::*;
 pub const SIMPLE_DM5: &'static [u8] = include_bytes!(
     "../assets/simple-dm5.bsp"
 );
+pub const TRESPASS: &'static [u8] = include_bytes!(
+    "../assets/trespass.bsp"
+);
 
 fn main() {
-    match parse_raw_bsp(SIMPLE_DM5) {
-        Done(_, _) => println!("Success!"),
+    match parse_raw_bsp(TRESPASS) {
+        Done(_, bsp) => println!("Success! Entities =\n{}", bsp.entities),
         Incomplete(n) => println!("Incomplete: {:?}", n),
         Error(_)   => println!("Failed :("),
     }
@@ -35,9 +38,16 @@ mod test_main {
     use super::raw_bsp_parsers;
 
     #[bench]
-    pub fn bench_raw_bsp(b: &mut Bencher) {
+    pub fn bench_simple(b: &mut Bencher) {
         b.iter(|| {
             raw_bsp_parsers::parse_raw_bsp(super::SIMPLE_DM5);
+        });
+    }
+
+    #[bench]
+    pub fn bench_complex(b: &mut Bencher) {
+        b.iter(|| {
+            raw_bsp_parsers::parse_raw_bsp(super::TRESPASS);
         });
     }
 }
