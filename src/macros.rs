@@ -24,6 +24,7 @@ macro_rules! get_from_header {
         let start = $field.offset as usize;
         let end = ($field.offset + $field.size) as usize;
         let slice = &$bytes[start..end];
+        /*
         println!("Number of {}: {} ({}b each) in section {}-{} ({}b)",
             stringify!($t),
             $field.size as usize / $size,
@@ -32,6 +33,7 @@ macro_rules! get_from_header {
             end,
             slice.len()
         );
+        */
         itry!(
             parse_vec::<$t>(
                 slice,
@@ -50,7 +52,10 @@ macro_rules! take_s {
         match take!($i, $count) {
             Done(rest, arr) =>
                 if let Ok(s) = String::from_utf8(
-                    arr.into_iter().map(|&a| a).collect::<Vec<_>>()
+                    arr.into_iter()
+                        .map(|&a| a)
+                        .take_while(|&c| c != 0)
+                        .collect::<Vec<_>>()
                 ) {
                     Done(
                         rest,
