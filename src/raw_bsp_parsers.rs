@@ -12,16 +12,12 @@ named! {
         chain!(
                        tag!(b"*")    ~
             reference: parse_str_int ,
-            || {
-                EntityValue::ModelRef(reference)
-            }
+            || { EntityValue::ModelRef(reference) }
         ) |
         chain!(
                        tag!(b"t")    ~
             reference: parse_str_int ,
-            || {
-                EntityValue::TargetRef(reference)
-            }
+            || { EntityValue::TargetRef(reference) }
         ) |
         chain!(
             first: parse_str_int        ~
@@ -34,9 +30,9 @@ named! {
         ) |
         chain!(
             first: parse_str_float      ~
-                   mandatory_whitespace  ~
+                   mandatory_whitespace ~
             secnd: parse_str_float      ~
-                   mandatory_whitespace  ~
+                   mandatory_whitespace ~
             third: parse_str_float      ~
                    whitespace  ,
             || { EntityValue::Vec3([first, secnd, third]) }
@@ -55,18 +51,9 @@ named! {
                    whitespace ,
             || { EntityValue::Vec2([first, secnd]) }
         ) |
-        map!(
-            parse_str_int,
-            EntityValue::Int
-        ) |
-        map!(
-            parse_str_float,
-            EntityValue::Float
-        ) |
-        map!(
-            take_s_until!("\""),
-            EntityValue::Text
-        )
+        map!(parse_str_int, EntityValue::Int) |
+        map!(parse_str_float, EntityValue::Float) |
+        map!(take_s_until!("\""), EntityValue::Text)
     )
 }
 
