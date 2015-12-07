@@ -4,7 +4,6 @@
 extern crate nom;
 #[macro_use]
 extern crate bitflags;
-extern crate test;
 
 #[macro_use]
 mod macros;
@@ -36,8 +35,11 @@ fn main() {
     }
 }
 
+#[cfg(test)]
 mod test_main {
-    use test::Bencher;
+    extern crate test;
+
+    use self::test::Bencher;
     use super::raw_bsp_parsers;
 
     #[bench]

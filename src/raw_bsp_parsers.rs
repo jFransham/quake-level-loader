@@ -29,6 +29,7 @@ named! {
                    whitespace ,
             || { EntityValue::IVec3([first, secnd, third]) }
         ) |
+        /*
         chain!(
             first: parse_str_float      ~
                    mandatory_whitespace ~
@@ -38,6 +39,7 @@ named! {
                    whitespace  ,
             || { EntityValue::Vec3([first, secnd, third]) }
         ) |
+        */
         chain!(
             first: parse_str_int        ~
                    mandatory_whitespace ~
@@ -45,6 +47,7 @@ named! {
                    whitespace ,
             || { EntityValue::IVec2([first, secnd]) }
         ) |
+        /*
         chain!(
             first: parse_str_float      ~
                    mandatory_whitespace ~
@@ -52,6 +55,7 @@ named! {
                    whitespace ,
             || { EntityValue::Vec2([first, secnd]) }
         ) |
+        */
         map!(parse_str_int, EntityValue::Int) |
         map!(parse_str_float, EntityValue::Float) |
         map!(take_s_until!("\""), EntityValue::Text)
@@ -59,27 +63,26 @@ named! {
 }
 
 fn parse_entity(i: &[u8]) -> IResult<&[u8], Entity> {
-    use nom::{Err, ErrorKind};
-
     let (rest, keyvals) = itry!(
         chain!(i,
                     whitespace ~
-                    char!('{')  ~
-                    whitespace  ~
+                    char!('{') ~
+                    whitespace ~
             params: many0!(
                 chain!(
-                           char!('\"')        ~
-                    name:  take_s_until!("\"")  ~
-                           char!('\"')        ~
-                           whitespace         ~
-                           char!('\"')        ~
-                    value: parse_entity_value ~
-                           char!('\"')        ~
-                           whitespace         ,
+                           char!('\"')         ~
+                    name:  take_s_until!("\"") ~
+                           char!('\"')         ~
+                           whitespace          ~
+                           char!('\"')         ~
+                    value: parse_entity_value  ~
+                           char!('\"')         ~
+                           whitespace          ,
                     || { (name, value) }
                 )
-            )                   ~
-                    char!('}')  ,
+            )                  ~
+                    char!('}') ~
+                    whitespace ,
             || {
                 params
             }
@@ -421,7 +424,7 @@ named! {
 
 pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
     let (_, header) = itry!(directory_header(i));
-    let (_, entities) = many1_from_header!(i,
+    let (_, entities) = consume_from_header!(i,
         header.entities,
         parse_entity,
         Entity

@@ -24,6 +24,21 @@ pub fn le_f32(input: &[u8]) -> IResult<&[u8], f32> {
   }
 }
 
+pub fn consume_to_vec<T>(
+    input: &[u8],
+    fun: fn(&[u8]) -> IResult<&[u8], T>
+) -> IResult<&[u8], Vec<T>> {
+    let mut output = Vec::new();
+    let mut bytes: &[u8] = input;
+    while bytes.len() > 0 {
+        let (rest, result) = itry!(fun(bytes));
+        bytes = rest;
+        output.push(result);
+    }
+
+    Done(bytes, output)
+}
+
 pub fn parse_vec<T>(
     input: &[u8],
     fun: fn(&[u8]) -> IResult<&[u8], T>,
@@ -86,34 +101,19 @@ named! {
     )
 }
 
-named! {
-    pub whitespace <()>,
-    chain!(
-        many0!(
-            alt!(
-                tag!(b"\n") |
-                tag!(b"\t") |
-                tag!(b"\r") |
-                tag!(b" ")
-            )
-        ) ,
-        || { () }
-    )
+fn treat_as_whitespace(i: u8) -> bool {
+    let c = i as char;
+    c.is_whitespace() || c.is_control()
 }
 
 named! {
-    pub mandatory_whitespace <()>,
-    chain!(
-        many1!(
-            alt!(
-                tag!(b"\n") |
-                tag!(b"\t") |
-                tag!(b"\r") |
-                tag!(b" ")
-            )
-        ) ,
-        || { () }
-    )
+    pub whitespace,
+    take_while!(treat_as_whitespace)
+}
+
+named! {
+    pub mandatory_whitespace,
+    take_while1!(treat_as_whitespace)
 }
 
 pub fn parse_str_float(i: &[u8]) -> IResult<&[u8], f32> {

@@ -21,8 +21,7 @@ macro_rules! get_from_header {
     }};
     ($bytes:expr, $field:expr, $fun:expr, $t:ty, $size:expr) => {{
         let start = $field.offset as usize;
-        let end = ($field.offset + $field.size) as usize;
-        let slice = &$bytes[start..end];
+        let slice = &$bytes[start..];
         itry!(
             parse_vec::<$t>(
                 slice,
@@ -40,6 +39,20 @@ macro_rules! many1_from_header {
         let slice = &$bytes[start..end];
         itry!(
             many1!(slice, $fun)
+        )
+    }}
+}
+
+macro_rules! consume_from_header {
+    ($bytes:expr, $field:expr, $fun:expr, $t:ty) => {{
+        let start = $field.offset as usize;
+        let end = start + $field.size as usize;
+        let slice = &$bytes[start..end];
+        itry!(
+            consume_to_vec::<$t>(
+                slice,
+                $fun
+            )
         )
     }}
 }

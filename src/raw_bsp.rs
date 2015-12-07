@@ -11,9 +11,9 @@ pub struct Entity {
 #[derive(Debug)]
 pub enum EntityValue {
     Text(String),
-    Vec3(Vec3),
+    // Vec3(Vec3),
     IVec3(IVec3),
-    Vec2(Vec2),
+    // Vec2(Vec2),
     IVec2(IVec2),
     Float(f32),
     Int(i32),
