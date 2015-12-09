@@ -26,12 +26,15 @@ pub const SIMPLE_DM5: &'static [u8] = include_bytes!(
 pub const TRESPASS: &'static [u8] = include_bytes!(
     "../assets/trespass.bsp"
 );
+pub const WATER_GIANT: &'static [u8] = include_bytes!(
+    "../assets/casdm9v1.bsp"
+);
 
 fn main() {
     match parse_raw_bsp(TRESPASS) {
-        Done(_, bsp) => println!("Success! Entities =\n{:#?}", bsp.textures),
+        Done(_, bsp)  => println!("{:#?}", bsp.planes),
         Incomplete(n) => println!("Incomplete: {:?}", n),
-        Error(_)   => println!("Failed :("),
+        Error(_)      => println!("Failed :("),
     }
 }
 
@@ -45,14 +48,27 @@ mod test_main {
     #[bench]
     pub fn bench_simple(b: &mut Bencher) {
         b.iter(|| {
-            raw_bsp_parsers::parse_raw_bsp(super::SIMPLE_DM5);
+            assert!(
+                raw_bsp_parsers::parse_raw_bsp(super::SIMPLE_DM5).is_done()
+            )
         });
     }
 
     #[bench]
     pub fn bench_complex(b: &mut Bencher) {
         b.iter(|| {
-            raw_bsp_parsers::parse_raw_bsp(super::TRESPASS);
+            assert!(
+                raw_bsp_parsers::parse_raw_bsp(super::TRESPASS).is_done()
+            )
+        });
+    }
+
+    #[bench]
+    pub fn bench_huge(b: &mut Bencher) {
+        b.iter(|| {
+            assert!(
+                raw_bsp_parsers::parse_raw_bsp(super::WATER_GIANT).is_done()
+            )
         });
     }
 }

@@ -11,9 +11,9 @@ pub struct Entity {
 #[derive(Debug)]
 pub enum EntityValue {
     Text(String),
-    // Vec3(Vec3),
+    Vec3(Vec3),
     IVec3(IVec3),
-    // Vec2(Vec2),
+    Vec2(Vec2),
     IVec2(IVec2),
     Float(f32),
     Int(i32),
@@ -39,7 +39,7 @@ pub struct RawBsp {
     pub faces: Vec<RawFace>,
     pub light_maps: Vec<Lightmap>,
     pub light_volumes: Vec<LightVolume>,
-    pub visibility_data: Vec<RawVisibilityData>,
+    pub visibility_data: Option<RawVisibilityData>,
 }
 
 #[derive(Debug)]
@@ -49,11 +49,13 @@ pub struct Texture {
     pub content_flags: ContentFlags,
 }
 
+#[derive(Debug)]
 pub struct Plane {
     pub normal: Vec3,
     pub distance: f32,
 }
 
+#[derive(Debug)]
 pub struct RawNode {
     pub plane: i32,
     pub children: (i32, i32),
@@ -61,6 +63,7 @@ pub struct RawNode {
     pub max: IVec3,
 }
 
+#[derive(Debug)]
 pub struct RawLeaf {
     pub visdata_cluster: i32,
     pub areaportal_area: i32,
@@ -72,14 +75,17 @@ pub struct RawLeaf {
     pub num_leaf_brushes: i32,
 }
 
+#[derive(Debug)]
 pub struct RawLeafFace {
     pub index: i32,
 }
 
+#[derive(Debug)]
 pub struct RawLeafBrush {
     pub index: i32,
 }
 
+#[derive(Debug)]
 pub struct RawModel {
     pub min: Vec3,
     pub max: Vec3,
@@ -89,17 +95,20 @@ pub struct RawModel {
     pub num_brushes: i32,
 }
 
+#[derive(Debug)]
 pub struct RawBrush {
     pub first_brush_side: i32,
     pub num_brush_sides: i32,
     pub texture_index: i32,
 }
 
+#[derive(Debug)]
 pub struct RawBrushSide {
     pub plane_index: i32,
     pub texture_index:i32,
 }
 
+#[derive(Debug)]
 pub struct Vertex {
     pub position: Vec3,
     pub surface_coords: Vec2,
@@ -108,16 +117,19 @@ pub struct Vertex {
     pub color: [u8; 4],
 }
 
+#[derive(Debug)]
 pub struct RawMeshVertex {
     pub offset: i32,
 }
 
+#[derive(Debug)]
 pub struct RawEffect {
     pub name: String,
     pub brush_index: i32,
     // padding: i32,
 }
 
+#[derive(Debug)]
 // 32 bits (4 bytes)
 pub enum FaceType {
     Polygon,   // = 1
@@ -126,6 +138,7 @@ pub enum FaceType {
     Billboard, // = 4
 }
 
+#[derive(Debug)]
 pub struct RawFace {
     pub texture_index: i32,
     pub effect_index: i32,
@@ -147,17 +160,20 @@ pub struct Lightmap {
     pub colors: [[Rgb; 128]; 128]
 }
 
+#[derive(Debug)]
 pub struct RotationDirection {
     pub phi: u8,
     pub theta: u8,
 }
 
+#[derive(Debug)]
 pub struct LightVolume {
     pub ambient: Rgb,
     pub directional: Rgb,
     pub direction: RotationDirection,
 }
 
+#[derive(Debug)]
 pub struct RawVisibilityData {
     pub num_vectors: i32,
     pub sizeof_vector: i32,

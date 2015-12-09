@@ -29,7 +29,6 @@ named! {
                    whitespace ,
             || { EntityValue::IVec3([first, secnd, third]) }
         ) |
-        /*
         chain!(
             first: parse_str_float      ~
                    mandatory_whitespace ~
@@ -39,7 +38,6 @@ named! {
                    whitespace  ,
             || { EntityValue::Vec3([first, secnd, third]) }
         ) |
-        */
         chain!(
             first: parse_str_int        ~
                    mandatory_whitespace ~
@@ -47,7 +45,6 @@ named! {
                    whitespace ,
             || { EntityValue::IVec2([first, secnd]) }
         ) |
-        /*
         chain!(
             first: parse_str_float      ~
                    mandatory_whitespace ~
@@ -55,7 +52,6 @@ named! {
                    whitespace ,
             || { EntityValue::Vec2([first, secnd]) }
         ) |
-        */
         map!(parse_str_int, EntityValue::Int) |
         map!(parse_str_float, EntityValue::Float) |
         map!(take_s_until!("\""), EntityValue::Text)
@@ -506,7 +502,7 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
         parse_light_volume,
         LightVolume
     );
-    let (_, visibility_data) = many1_from_header!(i,
+    let (_, visibility_data) = maybe_from_header!(i,
         header.visibility_data,
         parse_visibility_data,
         RawVisibilityData
