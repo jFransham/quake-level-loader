@@ -100,14 +100,14 @@ fn parse_entity(i: &[u8]) -> IResult<&[u8], Entity> {
 }
 
 named! {
-    parse_texture<Texture>,
+    parse_texture<RawTexture>,
     chain!(
-        name:          take_s!(64) ~
+        path:          take_s!(64) ~
         surface_flags: le_u32      ~
         content_flags: le_u32      ,
         || {
-            Texture {
-                name: name,
+            RawTexture {
+                path: path,
                 surface_flags: SurfaceFlags::from_bits_truncate(
                     surface_flags
                 ),
@@ -145,8 +145,8 @@ named! {
         max:     parse_ivec3  ,
         || {
             RawNode {
-                plane: plane,
-                children: children,
+                plane_index: plane,
+                children_indices: children,
                 min: min,
                 max: max,
             }
@@ -322,7 +322,7 @@ named! {
         effect_index:      le_i32          ~
         face_type:         parse_face_type ~
         first_vertex:      le_i32          ~
-        num_vertexes:      le_i32          ~
+        num_vertices:      le_i32          ~
         first_mesh_vertex: le_i32          ~
         num_mesh_vertices: le_i32          ~
         lightmap_index:    le_i32          ~
@@ -341,7 +341,7 @@ named! {
                 effect_index: effect_index,
                 face_type: face_type,
                 first_vertex: first_vertex,
-                num_vertexes: num_vertexes,
+                num_vertices: num_vertices,
                 first_mesh_vertex: first_mesh_vertex,
                 num_mesh_vertices: num_mesh_vertices,
                 lightmap_index: lightmap_index,
@@ -428,7 +428,7 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
     let (_, textures) = get_from_header!(i,
         header.textures,
         parse_texture,
-        Texture,
+        RawTexture,
         72
     );
     let (_, planes) = get_from_header!(i,
@@ -502,7 +502,7 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
         parse_light_volume,
         LightVolume
     );
-    let (_, visibility_data) = maybe_from_header!(i,
+    let (_, visibility_data) = from_header!(i,
         header.visibility_data,
         parse_visibility_data,
         RawVisibilityData

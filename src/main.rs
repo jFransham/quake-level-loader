@@ -1,24 +1,27 @@
 #![feature(test)]
+#![feature(drain)]
+#![feature(iter_arith)]
 
 #[macro_use]
 extern crate nom;
 #[macro_use]
 extern crate bitflags;
+extern crate itertools;
+extern crate glium;
 
 #[macro_use]
 mod macros;
+mod bsp_transform;
+mod directory_header;
+mod helpers;
 mod raw_bsp;
 mod raw_bsp_parsers;
-mod directory_header;
 mod texture_flags;
-mod helpers;
 
+use itertools::*;
 use nom::IResult::*;
+use raw_bsp::*;
 use raw_bsp_parsers::*;
-
-/*********************************
- * All numbers are little-endian *
- *********************************/
 
 pub const SIMPLE_DM5: &'static [u8] = include_bytes!(
     "../assets/simple-dm5.bsp"
@@ -31,8 +34,32 @@ pub const WATER_GIANT: &'static [u8] = include_bytes!(
 );
 
 fn main() {
-    match parse_raw_bsp(TRESPASS) {
-        Done(_, bsp)  => println!("{:#?}", bsp.planes),
+    match parse_raw_bsp(SIMPLE_DM5) {
+        Done(_, bsp)  => println!(
+            "{:#?}",
+            bsp.brushes
+                .iter()
+                .map(|b| (b, b.texture_index))
+                .sorted_by(|&a, &b| a.1.cmp(&b.1))
+                .into_iter()
+                .unique_by(|b| b.1)
+                .map(|(b, i)|
+                     (
+                         bsp.textures.get(i as usize).unwrap(),
+                         bsp.brush_sides[
+                             {
+                                 let start = b.first_brush_side as usize;
+                                 let end   = start + b.num_brush_sides as usize;
+                                 start..end
+                             }
+                         ].iter().map(|s|
+                             bsp.textures.get(
+                                 s.texture_index as usize
+                             ).unwrap()
+                         ).collect::<Vec<_>>(),
+                     )
+                ).collect::<Vec<_>>()
+        ),
         Incomplete(n) => println!("Incomplete: {:?}", n),
         Error(_)      => println!("Failed :("),
     }

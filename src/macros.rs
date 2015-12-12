@@ -32,13 +32,13 @@ macro_rules! get_from_header {
     }}
 }
 
-macro_rules! maybe_from_header {
+macro_rules! from_header {
     ($bytes:expr, $field:expr, $fun:ident, $t:ty) => {{
         let start = $field.offset as usize;
         let end = ($field.offset + $field.size) as usize;
         let slice = &$bytes[start..end];
         itry!(
-            opt!(slice, complete!($fun))
+            $fun(slice)
         )
     }}
 }

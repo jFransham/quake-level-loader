@@ -24,7 +24,7 @@ pub enum EntityValue {
 pub struct RawBsp {
     pub header: DirectoryHeader,
     pub entities: Vec<Entity>,
-    pub textures: Vec<Texture>,
+    pub textures: Vec<RawTexture>,
     pub planes: Vec<Plane>,
     pub nodes: Vec<RawNode>,
     pub leaves: Vec<RawLeaf>,
@@ -39,17 +39,17 @@ pub struct RawBsp {
     pub faces: Vec<RawFace>,
     pub light_maps: Vec<Lightmap>,
     pub light_volumes: Vec<LightVolume>,
-    pub visibility_data: Option<RawVisibilityData>,
+    pub visibility_data: RawVisibilityData,
 }
 
-#[derive(Debug)]
-pub struct Texture {
-    pub name: String,
+#[derive(Debug, Clone)]
+pub struct RawTexture {
+    pub path: String,
     pub surface_flags: SurfaceFlags,
     pub content_flags: ContentFlags,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Plane {
     pub normal: Vec3,
     pub distance: f32,
@@ -57,8 +57,8 @@ pub struct Plane {
 
 #[derive(Debug)]
 pub struct RawNode {
-    pub plane: i32,
-    pub children: (i32, i32),
+    pub plane_index: i32,
+    pub children_indices: (i32, i32),
     pub min: IVec3,
     pub max: IVec3,
 }
@@ -129,7 +129,7 @@ pub struct RawEffect {
     // padding: i32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 // 32 bits (4 bytes)
 pub enum FaceType {
     Polygon,   // = 1
@@ -138,13 +138,13 @@ pub enum FaceType {
     Billboard, // = 4
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RawFace {
     pub texture_index: i32,
     pub effect_index: i32,
     pub face_type: FaceType,
     pub first_vertex: i32,
-    pub num_vertexes: i32,
+    pub num_vertices: i32,
     pub first_mesh_vertex: i32,
     pub num_mesh_vertices: i32,
     pub lightmap_index: i32,
