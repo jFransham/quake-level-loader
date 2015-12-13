@@ -410,8 +410,8 @@ fn build_leaves<'a>(
                               raw.leaves.iter()
                               .enumerate()
                               .filter(|tup|
-                                      tup.1.visdata_cluster as usize == i
-                                     )
+                                  tup.1.visdata_cluster as usize == i
+                              )
                               .map(|(index, _)| index)
                               .collect::<Vec<_>>()
                              )
