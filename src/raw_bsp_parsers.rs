@@ -502,7 +502,7 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
         parse_light_volume,
         LightVolume
     );
-    let (_, visibility_data) = from_header!(i,
+    let (_, visibility_data) = maybe_from_header!(i,
         header.visibility_data,
         parse_visibility_data,
         RawVisibilityData
@@ -526,6 +526,12 @@ pub fn parse_raw_bsp(i: &[u8]) -> IResult<&[u8], RawBsp> {
         faces: faces,
         light_maps: light_maps,
         light_volumes: light_volumes,
-        visibility_data: visibility_data,
+        visibility_data: visibility_data.unwrap_or(
+            RawVisibilityData {
+                num_vectors: 0,
+                sizeof_vector: 0,
+                raw_bytes: vec![],
+            }
+        )
     })
 }

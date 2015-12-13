@@ -49,7 +49,7 @@ fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
             "assets/trespass",
             f
         );
-    match parse_raw_bsp(WATER_GIANT) {
+    match parse_raw_bsp(TRESPASS) {
         Done(_, bsp)  => {
             // Ignore entities for now
             bsp_transform::build_bsp(

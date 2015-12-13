@@ -78,7 +78,7 @@ impl Bsp {
         if let &BspTreeNode::Leaf(leaf_index) = current {
             Some(&self.leaf_owner[leaf_index])
         } else {
-            unreachable!()
+            None
         }
     }
 
@@ -94,6 +94,7 @@ impl Bsp {
 enum BspTreeNode {
     NonTerminal(usize),
     Leaf(usize),
+    Empty,
 }
 
 struct NonTerminal {
@@ -105,6 +106,7 @@ struct NonTerminal {
 
 #[derive(Debug)]
 pub struct Leaf {
+    cluster: usize,
     visdata: Vec<usize>,
     pub faces: Vec<Face>,
     pub brushes: Vec<Brush>,
@@ -216,14 +218,14 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             if let Some(tup) = self.get_real_path_and_ext(path) {
                 tup
             } else {
-                println!("{}", path);
+                println!("{} not found", path);
                 return None
             };
 
         let mut f = if let Ok(a) = File::open(&real_path) {
                 a
             } else {
-                println!("Cannot find {:?}", &real_path);
+                println!("Cannot open {:?}", &real_path);
                 return None
             };
         let mut reader = BufReader::new(f);
@@ -359,6 +361,8 @@ fn build_leaves<'a>(
     raw: &mut RawBsp,
     textures: &Vec<Rc<Texture>>,
 ) -> Vec<Leaf> {
+    use itertools::*;
+
     let faces = &raw.faces;
     let leaf_brushes = &raw.leaf_brushes;
     let leaf_faces = &raw.leaf_faces;
@@ -368,79 +372,112 @@ fn build_leaves<'a>(
     let raw_textures = &raw.textures;
     let visibility_data = &raw.visibility_data;
     let mesh_verts = &raw.mesh_vertices;
-    raw.leaves.iter()
-        .map(|l| {
-            let faces = leaf_faces[{
-                    let start = l.first_leaf_face as usize;
-                    let end = start + l.num_leaf_faces as usize;
-                    start..end
-                }].iter()
-                .map(|i| &faces[i.index as usize])
-                .map(|f| build_face(f, mesh_verts, textures))
-                .collect::<Vec<_>>();
-            let brushes = leaf_brushes[{
-                    let start = l.first_leaf_brush as usize;
-                    let end = start + l.num_leaf_brushes as usize;
-                    start..end
-                }].iter()
-                .map(|i| &brushes[i.index as usize])
-                .map(|b| build_brush(
-                        b,
-                        brush_sides,
-                        planes,
-                        raw_textures,
+    let clusters = raw.leaves.iter()
+                    .sorted_by(|a, b|
+                        a.visdata_cluster.cmp(&b.visdata_cluster)
                     )
-                )
-                .collect::<Vec<_>>();
+                    .into_iter()
+                    .group_by(|l| l.visdata_cluster)
+                    .collect::<Vec<_>>();
+    clusters.iter().filter_map(|&(cluster, ref group)| {
+        if cluster < 0 {
+            return None
+        }
 
-            Leaf {
-                visdata: if l.visdata_cluster < 0 {
-                        vec![]
-                } else {
-                    get_indices(
-                        &visibility_data.raw_bytes[{
-                            let start = (l.visdata_cluster *
-                                         visibility_data.sizeof_vector) as usize;
-                            let end = start +
-                                visibility_data.sizeof_vector as usize;
-                            start..end
-                        }]
-                        ).into_iter()
-                    .flat_map(|i|
-                              raw.leaves.iter()
-                              .enumerate()
-                              .filter(|tup|
-                                  tup.1.visdata_cluster as usize == i
-                              )
-                              .map(|(index, _)| index)
-                              .collect::<Vec<_>>()
-                             )
-                    .collect::<Vec<_>>()
-                },
-                faces: faces,
-                brushes: brushes,
-            }
+        // make a closure to not have to deal with iterator adaptor types
+        let get_faces = |leaf: &&RawLeaf| {
+            leaf_faces[{
+                let start = leaf.first_leaf_face as usize;
+                let end = start + leaf.num_leaf_faces as usize;
+                start..end
+            }].iter()
+            .map(|i| &faces[i.index as usize])
+            .map(|f| build_face(f, mesh_verts, textures))
+        };
+        let get_brushes = |leaf: &&RawLeaf| {
+            leaf_brushes[{
+                let start = leaf.first_leaf_brush as usize;
+                let end = start + leaf.num_leaf_brushes as usize;
+                start..end
+            }].iter()
+            .map(|i| &brushes[i.index as usize])
+            .map(|b| build_brush(
+                    b,
+                    brush_sides,
+                    planes,
+                    raw_textures,
+                )
+            )
+        };
+
+        let faces = group.iter().flat_map(get_faces).collect::<Vec<_>>();
+        let brushes = group.iter().flat_map(get_brushes).collect::<Vec<_>>();
+
+        Some(Leaf {
+            cluster: cluster as usize,
+            visdata: get_indices(
+                    &visibility_data.raw_bytes[{
+                        let start = (cluster *
+                                     visibility_data.sizeof_vector) as usize;
+                        let end = start +
+                            visibility_data.sizeof_vector as usize;
+                        start..end
+                    }]).into_iter()
+                .flat_map(|i|
+                          clusters.iter()
+                          .enumerate()
+                          .filter(|&(cluster, _)|
+                              cluster == i
+                          )
+                          .map(|(index, _)| index)
+                          .collect::<Vec<_>>()
+                         )
+                .collect::<Vec<_>>(),
+            faces: faces,
+            brushes: brushes,
         })
-        .collect::<Vec<_>>()
+    })
+    .collect::<Vec<_>>()
 }
 
-fn get_bsp_tree_node(i: i32) -> BspTreeNode {
+fn get_bsp_tree_node(
+    i: i32, raw_leaves: &Vec<RawLeaf>, leaves: &Vec<Leaf>
+) -> BspTreeNode {
     if i < 0 {
-        BspTreeNode::Leaf((-i) as usize)
+        let leaf_index = (-i) as usize;
+        let actual_index = leaves.iter()
+            .enumerate()
+            .find(|&(_, l)|
+                raw_leaves[leaf_index].visdata_cluster as usize == l.cluster
+            )
+            .map(|o| o.0);
+        if let Some(index) = actual_index {
+            BspTreeNode::Leaf(index)
+        } else {
+            BspTreeNode::Empty
+        }
     } else {
         BspTreeNode::NonTerminal(i as usize)
     }
 }
 
-fn build_nodes(raw: &mut RawBsp) -> Vec<NonTerminal> {
+fn build_nodes(raw: &mut RawBsp, leaves: &Vec<Leaf>) -> Vec<NonTerminal> {
     let planes = &raw.planes;
-    raw.nodes.drain(..)
+    raw.nodes.iter()
         .map(|n|
             NonTerminal {
                 plane: planes[n.plane_index as usize].clone(),
                 bounds: (n.min.clone(), n.max.clone()),
-                front: get_bsp_tree_node(n.children_indices.0),
-                back: get_bsp_tree_node(n.children_indices.1),
+                front: get_bsp_tree_node(
+                    n.children_indices.0,
+                    &raw.leaves,
+                    leaves
+                ),
+                back: get_bsp_tree_node(
+                    n.children_indices.1,
+                    &raw.leaves,
+                    leaves
+                ),
             }
         )
         .collect::<Vec<_>>()
@@ -493,12 +530,14 @@ pub fn build_bsp<'a, T: Facade>(
         ).expect("Invalid map");
     let ents = replace(&mut raw.entities, vec![]);
     let vertices = replace(&mut raw.vertices, vec![]);
+    let leaves = build_leaves(&mut raw, &tex);
+    let nodes = build_nodes(&mut raw, &leaves);
 
     (
         ents,
         Bsp::new(
-            build_nodes(&mut raw),
-            build_leaves(&mut raw, &tex),
+            nodes,
+            leaves,
             vertices
         )
     )
