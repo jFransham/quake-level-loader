@@ -1,17 +1,17 @@
-use std::path::Path;
-use std::mem::{replace, size_of};
+use std::path::{Path,PathBuf};
+use std::fs::PathExt;
+use std::mem::replace;
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
 use glium::texture::Texture2d;
+use glium::backend::Facade;
+use image;
 use texture_flags::*;
 use helpers::*;
 use raw_bsp::*;
 
 // TODO: IMPORTANT HOLY SHIT 𝘋𝘖 𝘕𝘖𝘛 𝘍𝘖𝘙𝘎𝘌𝘛!
 //       Remove all uses of [] & use try!(_.get(_)) instead
-
-// TODO: implement so this acts like a Vec<Rc<T>>
-//       Extract to crate?
 
 pub struct Bsp {
     node_owner: Vec<NonTerminal>,
@@ -23,7 +23,10 @@ pub struct Bsp {
 
 impl Bsp {
     pub fn get_visible_set_at(&self, point: Vec3) -> Vec<&Leaf> {
-        self.get_visible_set_of(self.get_terminal_at(point))
+        self.get_terminal_at(point).map_or(
+            vec![],
+            |t| self.get_visible_set_of(t)
+        )
     }
 
     fn new(
@@ -45,7 +48,7 @@ impl Bsp {
         unimplemented!()
     }
 
-    fn get_terminal_at(&self, point: Vec3) -> &Leaf {
+    fn get_terminal_at(&self, point: Vec3) -> Option<&Leaf> {
         let mut current = &self.root;
         while let &BspTreeNode::NonTerminal(node_index) = current {
             let node = &self.node_owner[node_index];
@@ -53,6 +56,17 @@ impl Bsp {
                 .zip(node.plane.normal.iter())
                 .map(|(a, b)| a * b)
                 .sum::<f32>();
+
+            if izip!(
+                point.iter(),
+                node.bounds.0.iter(),
+                node.bounds.1.iter()
+            ).any(
+                |(&p, &min, &max)| p < min as f32 || p > max as f32
+            ) {
+                return None;
+            }
+
             current =
                 if dot < node.plane.distance {
                     &node.back
@@ -62,7 +76,7 @@ impl Bsp {
         }
 
         if let &BspTreeNode::Leaf(leaf_index) = current {
-            &self.leaf_owner[leaf_index]
+            Some(&self.leaf_owner[leaf_index])
         } else {
             unreachable!()
         }
@@ -89,30 +103,156 @@ struct NonTerminal {
     back: BspTreeNode,
 }
 
+#[derive(Debug)]
 pub struct Leaf {
     visdata: Vec<usize>,
-    faces: Vec<Face>,
-    brushes: Vec<Brush>,
+    pub faces: Vec<Face>,
+    pub brushes: Vec<Brush>,
 }
 
+#[derive(Debug)]
 pub struct Face {
     texture: Rc<Texture>,
     render_type: FaceRenderType,
 }
 
+#[derive(Debug)]
 struct Surface {
     plane: Plane,
     surface_flags: SurfaceFlags,
 }
 
+#[derive(Debug)]
 pub struct Texture {
     hash: u64,
     texture: Texture2d,
     surface_flags: SurfaceFlags,
 }
 
-impl Texture {
-    pub fn load<T: ?Sized + AsRef<Path>>(path: &T) -> Option<Texture> {
+// TODO: make this take a root directory
+pub struct TextureBuilder<'a, T: Facade + 'a> {
+    root: PathBuf,
+    facade: &'a T,
+    cache: Vec<Weak<Texture>>,
+}
+
+impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
+    pub fn new<A: Into<PathBuf>>(a: A, facade: &'a T) -> TextureBuilder<'a, T> {
+        TextureBuilder { root: a.into(), facade: facade, cache: vec![] }
+    }
+
+    fn get_real_path_and_ext(
+        &self,
+        path: &String
+    ) -> Option<(image::ImageFormat, PathBuf)> {
+        use image::ImageFormat;
+        use image::ImageFormat::*;
+
+        fn get_extensions(i: &ImageFormat) -> &'static [&'static str] {
+            static PNG_EXT:  [&'static str; 1] = ["png"];
+            static JPEG_EXT: [&'static str; 2] = ["jpeg", "jpg"];
+            static GIF_EXT:  [&'static str; 1] = ["gif"];
+            static WEBP_EXT: [&'static str; 1] = ["webp"];
+            static PPM_EXT:  [&'static str; 1] = ["ppm"];
+            static TIFF_EXT: [&'static str; 1] = ["tiff"];
+            static TGA_EXT:  [&'static str; 1] = ["tga"];
+            static BMP_EXT:  [&'static str; 1] = ["bmp"];
+            static ICO_EXT:  [&'static str; 1] = ["ico"];
+
+            match *i {
+                PNG  => &PNG_EXT,
+                JPEG => &JPEG_EXT,
+                GIF  => &GIF_EXT,
+                WEBP => &WEBP_EXT,
+                PPM  => &PPM_EXT,
+                TIFF => &TIFF_EXT,
+                TGA  => &TGA_EXT,
+                BMP  => &BMP_EXT,
+                ICO  => &ICO_EXT,
+            }
+        }
+
+        let root: PathBuf = self.root.join(path);
+        let file_name: String =
+            if let Some(Some(f)) = root.file_name().map(|o| o.to_str()) {
+                f.into()
+            } else {
+                return None
+            };
+        for ex in [PNG, JPEG, GIF, WEBP, PPM, TIFF, TGA, BMP, ICO].into_iter() {
+            let extensions = get_extensions(&ex);
+
+            for str_ex in extensions {
+                use std::env;
+
+                let out = root.with_file_name(format!("{}.{}", file_name, str_ex));
+
+                if out.is_file() { return Some((*ex, out.to_path_buf())); }
+            }
+        }
+
+        None
+    }
+
+    pub fn load(
+        &mut self, path: &String, surface_flags: SurfaceFlags
+    ) -> Option<Rc<Texture>> {
+        use std::io::BufReader;
+        use std::fs::File;
+        use glium::texture::RawImage2d;
+        use image;
+
+        let str_hash = get_string_hash(path);
+        if let Some(t) = self.cache.iter()
+            .filter_map(|weak| weak.upgrade())
+            .find(
+                |t| t.hash == str_hash
+            )
+        {
+            return Some(t);
+        }
+
+        let (ext, real_path) =
+            if let Some(tup) = self.get_real_path_and_ext(path) {
+                tup
+            } else {
+                println!("{}", path);
+                return None
+            };
+
+        let mut f = if let Ok(a) = File::open(&real_path) {
+                a
+            } else {
+                println!("Cannot find {:?}", &real_path);
+                return None
+            };
+        let mut reader = BufReader::new(f);
+
+        let raw = if let Ok(a) = image::load(
+                reader,
+                ext
+            ) {
+                a.to_rgba()
+            } else {
+                println!("Cannot interpret {:?}", &real_path);
+                return None
+            };
+        let image_dimensions = raw.dimensions();
+        let image = RawImage2d::from_raw_rgba_reversed(
+                raw.into_raw(), image_dimensions
+            );
+        Texture2d::new(self.facade, image).ok()
+            .map(|t| {
+                let out = Rc::new(
+                    Texture {
+                        hash: get_string_hash(path),
+                        texture: t,
+                        surface_flags: surface_flags
+                    }
+                );
+                self.cache.push(Rc::downgrade(&out));
+                out
+            })
     }
 }
 
@@ -122,11 +262,13 @@ impl PartialEq for Texture {
 
 impl Eq for Texture {}
 
+#[derive(Debug)]
 pub struct Brush {
     surfaces: Vec<Surface>,
     content_flags: ContentFlags,
 }
 
+#[derive(Debug)]
 enum FaceRenderType {
     Patch(Vec<Vec3>),
     Mesh(Vec<usize>),
@@ -175,7 +317,9 @@ fn build_face(
                     .collect::<Vec<_>>()
                 ),
             &FaceType::Patch     =>
-                unimplemented!(),
+                FaceRenderType::Patch(
+                    vec![] // TODO: make this work
+                ),
             &FaceType::Billboard =>
                 FaceRenderType::Billboard(
                     0 // TODO: support things proper-like
@@ -225,7 +369,11 @@ fn build_leaves<'a>(
     let visibility_data = &raw.visibility_data;
     let mesh_verts = &raw.mesh_vertices;
     raw.leaves.drain(..)
-        .map(|l| {
+        .filter_map(|l| {
+            if l.visdata_cluster < 0 {
+                return None;
+            }
+
             let faces = leaf_faces[{
                     let start = l.first_leaf_face as usize;
                     let end = start + l.num_leaf_faces as usize;
@@ -249,7 +397,7 @@ fn build_leaves<'a>(
                 )
                 .collect::<Vec<_>>();
 
-            Leaf {
+            Some(Leaf {
                 visdata: get_indices(
                     &visibility_data.raw_bytes[{
                         let start = (l.visdata_cluster *
@@ -261,7 +409,7 @@ fn build_leaves<'a>(
                 ),
                 faces: faces,
                 brushes: brushes,
-            }
+            })
         })
         .collect::<Vec<_>>()
 }
@@ -288,32 +436,33 @@ fn build_nodes(raw: &mut RawBsp) -> Vec<NonTerminal> {
         .collect::<Vec<_>>()
 }
 
-fn build_textures(
-    raw: &Vec<RawTexture>, cache: &mut Vec<Weak<Texture>>
+fn build_textures<T: Facade>(
+    raw: &Vec<RawTexture>,
+    builder: &mut TextureBuilder<T>
 ) -> Result<Vec<Rc<Texture>>, ()> {
-    let out = Vec::with_capacity(raw.len());
-    for res in raw.iter().map(|r| get_texture(r, cache)) {
+    let mut out = Vec::with_capacity(raw.len());
+    for res in raw.iter().map(|r| get_texture(r, builder)) {
         try!(res.map(|t| out.push(t)));
     }
     Ok(out)
 }
 
-// TODO: Load textures
-fn get_texture(
-    raw: &RawTexture, cache: &mut Vec<Weak<Texture>>
+fn get_texture<T: Facade>(
+    raw: &RawTexture,
+    builder: &mut TextureBuilder<T>
 ) -> Result<Rc<Texture>, ()> {
-    let str_hash = get_string_hash(&raw.path);
-    if let Some(t) = cache.iter()
-        .filter_map(|weak| weak.upgrade())
-        .find(
-            |t| t.hash == str_hash
-    ) {
-        Ok(t)
-    } else {
-        let out: Rc<Texture> = Rc::new(try!(Texture::load(&raw.path).ok_or(())));
-        cache.push(Rc::downgrade(&out));
-        Ok(out)
-    }
+    builder.load(
+        &raw.path,
+        raw.surface_flags.clone()
+        )
+    .or_else(||
+         // TODO: Replace this with 𝘱𝘳𝘰𝘱𝘦𝘳 missingno texture
+         builder.load(
+             &"textures/phdm5/metb_seam".into(),
+             raw.surface_flags.clone()
+             )
+        )
+    .ok_or(())
 }
 
 fn get_string_hash(s: &String) -> u64 {
@@ -324,12 +473,13 @@ fn get_string_hash(s: &String) -> u64 {
     hasher.finish()
 }
 
-pub fn build_bsp<'a>(
-    mut raw: RawBsp, texture_cache: &mut Vec<Weak<Texture>>
+pub fn build_bsp<'a, T: Facade>(
+    mut raw: RawBsp,
+    texture_builder: &mut TextureBuilder<T>
 ) -> (Vec<Entity>, Bsp) {
     let tex = build_textures(
             &raw.textures,
-            texture_cache
+            texture_builder
         ).expect("Invalid map");
     let ents = replace(&mut raw.entities, vec![]);
     let vertices = replace(&mut raw.vertices, vec![]);

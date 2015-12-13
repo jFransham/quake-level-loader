@@ -1,0 +1,8 @@
+{
+map            "trespass"
+longname       "trespass"
+bots           "daemia sorlag lucy"
+fraglimit      "20"
+type           "ffa tourney team"
+author         "pat howard"
+}

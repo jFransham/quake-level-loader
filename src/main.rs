@@ -1,12 +1,15 @@
 #![feature(test)]
 #![feature(drain)]
 #![feature(iter_arith)]
+#![feature(path_ext)]
 
 #[macro_use]
 extern crate nom;
 #[macro_use]
 extern crate bitflags;
+#[macro_use]
 extern crate itertools;
+extern crate image;
 extern crate glium;
 
 #[macro_use]
@@ -18,7 +21,6 @@ mod raw_bsp;
 mod raw_bsp_parsers;
 mod texture_flags;
 
-use itertools::*;
 use nom::IResult::*;
 use raw_bsp::*;
 use raw_bsp_parsers::*;
@@ -34,34 +36,29 @@ pub const WATER_GIANT: &'static [u8] = include_bytes!(
 );
 
 fn main() {
-    match parse_raw_bsp(SIMPLE_DM5) {
-        Done(_, bsp)  => println!(
-            "{:#?}",
-            bsp.brushes
-                .iter()
-                .map(|b| (b, b.texture_index))
-                .sorted_by(|&a, &b| a.1.cmp(&b.1))
-                .into_iter()
-                .unique_by(|b| b.1)
-                .map(|(b, i)|
-                     (
-                         bsp.textures.get(i as usize).unwrap(),
-                         bsp.brush_sides[
-                             {
-                                 let start = b.first_brush_side as usize;
-                                 let end   = start + b.num_brush_sides as usize;
-                                 start..end
-                             }
-                         ].iter().map(|s|
-                             bsp.textures.get(
-                                 s.texture_index as usize
-                             ).unwrap()
-                         ).collect::<Vec<_>>(),
-                     )
-                ).collect::<Vec<_>>()
-        ),
-        Incomplete(n) => println!("Incomplete: {:?}", n),
-        Error(_)      => println!("Failed :("),
+    use glium::DisplayBuild;
+
+    let display = glium::glutin::WindowBuilder::new().build_glium().unwrap();
+    let map = get_map(&display);
+    println!("{:?}", map.get_visible_set_at([0.0, 0.0, 0.0]));
+}
+
+fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
+    let mut builder =
+        bsp_transform::TextureBuilder::new(
+            "assets/trespass",
+            f
+        );
+    match parse_raw_bsp(TRESPASS) {
+        Done(_, bsp)  => {
+            // Ignore entities for now
+            bsp_transform::build_bsp(
+                bsp,
+                &mut builder
+            ).1
+        },
+        Incomplete(n) => panic!("Incomplete: {:?}", n),
+        Error(_)      => panic!("Failed :("),
     }
 }
 
