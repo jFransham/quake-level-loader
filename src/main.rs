@@ -1,5 +1,4 @@
 #![feature(test)]
-#![feature(drain)]
 #![feature(iter_arith)]
 #![feature(path_ext)]
 
@@ -22,7 +21,6 @@ mod raw_bsp_parsers;
 mod texture_flags;
 
 use nom::IResult::*;
-use raw_bsp::*;
 use raw_bsp_parsers::*;
 
 pub const SIMPLE_DM5: &'static [u8] = include_bytes!(

@@ -376,14 +376,14 @@ fn parse_visibility_data(i: &[u8]) -> IResult<&[u8], RawVisibilityData> {
 }
 
 fn parse_lightmap(i: &[u8]) -> IResult<&[u8], Lightmap> {
+    use itertools::*;
+
     let mut out = [[[0u8, 0u8, 0u8]; 128]; 128];
     let mut rest = i;
-    for x in 0..128 {
-        for y in 0..128 {
-            let (a, b) = itry!(take_exact!(rest, 3));
-            rest = a;
-            out[y][x] = b;
-        }
+    for (x, y) in (0..128).cartesian_product(0..128) {
+        let (a, b) = itry!(take_exact!(rest, 3));
+        rest = a;
+        out[y][x] = b;
     }
     Done(rest, Lightmap { colors: out })
 }

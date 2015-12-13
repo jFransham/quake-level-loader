@@ -1,8 +1,7 @@
-use std::path::{Path,PathBuf};
+use std::path::PathBuf;
 use std::fs::PathExt;
 use std::mem::replace;
 use std::rc::{Rc, Weak};
-use std::cell::RefCell;
 use glium::texture::Texture2d;
 use glium::backend::Facade;
 use image;
@@ -17,7 +16,7 @@ pub struct Bsp {
     node_owner: Vec<NonTerminal>,
     leaf_owner: Vec<Leaf>,
     // For caching/etc. needs keep this separate and store indexes only
-    vertices: Vec<Vertex>,
+    pub vertices: Vec<Vertex>,
     root: BspTreeNode,
 }
 
@@ -145,7 +144,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
 
     fn get_real_path_and_ext(
         &self,
-        path: &String
+        path: &str
     ) -> Option<(image::ImageFormat, PathBuf)> {
         use image::ImageFormat;
         use image::ImageFormat::*;
@@ -185,8 +184,6 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             let extensions = get_extensions(&ex);
 
             for str_ex in extensions {
-                use std::env;
-
                 let out = root.with_file_name(format!("{}.{}", file_name, str_ex));
 
                 if out.is_file() { return Some((*ex, out.to_path_buf())); }
@@ -197,7 +194,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     }
 
     pub fn load(
-        &mut self, path: &String, surface_flags: SurfaceFlags
+        &mut self, path: &str, surface_flags: SurfaceFlags
     ) -> Option<Rc<Texture>> {
         use std::io::BufReader;
         use std::fs::File;
@@ -222,13 +219,13 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                 return None
             };
 
-        let mut f = if let Ok(a) = File::open(&real_path) {
+        let f = if let Ok(a) = File::open(&real_path) {
                 a
             } else {
                 println!("Cannot open {:?}", &real_path);
                 return None
             };
-        let mut reader = BufReader::new(f);
+        let reader = BufReader::new(f);
 
         let raw = if let Ok(a) = image::load(
                 reader,
@@ -277,10 +274,6 @@ enum FaceRenderType {
     Billboard(usize),
 }
 
-struct BspBuilder {
-    bsp: RawBsp,
-}
-
 fn get_indices(visdata: &[u8]) -> Vec<usize> {
     (0..visdata.len()*8).into_iter()
         .filter(|i|
@@ -291,13 +284,13 @@ fn get_indices(visdata: &[u8]) -> Vec<usize> {
 
 fn build_face(
     face: &RawFace,
-    mesh_verts: &Vec<RawMeshVertex>,
-    textures: &Vec<Rc<Texture>>
+    mesh_verts: &[RawMeshVertex],
+    textures: &[Rc<Texture>]
 ) -> Face {
     Face {
         texture: textures[face.texture_index as usize].clone(),
-        render_type: match &face.face_type {
-            &FaceType::Polygon   =>
+        render_type: match face.face_type {
+            FaceType::Polygon   =>
                 FaceRenderType::Mesh(
                     {
                         let start = face.first_vertex as usize;
@@ -306,7 +299,7 @@ fn build_face(
                     }.into_iter()
                     .collect::<Vec<_>>()
                 ),
-            &FaceType::Mesh      =>
+            FaceType::Mesh      =>
                 FaceRenderType::Mesh(
                     {
                         let start = face.first_mesh_vertex as usize;
@@ -318,11 +311,11 @@ fn build_face(
                     .map(|i| i as usize)
                     .collect::<Vec<_>>()
                 ),
-            &FaceType::Patch     =>
+            FaceType::Patch     =>
                 FaceRenderType::Patch(
                     vec![] // TODO: make this work
                 ),
-            &FaceType::Billboard =>
+            FaceType::Billboard =>
                 FaceRenderType::Billboard(
                     0 // TODO: support things proper-like
                 ),
@@ -332,9 +325,9 @@ fn build_face(
 
 fn build_brush(
     brush: &RawBrush,
-    brush_sides: &Vec<RawBrushSide>,
-    planes: &Vec<Plane>,
-    raw_textures: &Vec<RawTexture>,
+    brush_sides: &[RawBrushSide],
+    planes: &[Plane],
+    raw_textures: &[RawTexture],
 ) -> Brush {
     Brush {
         surfaces: brush_sides[{
@@ -359,7 +352,7 @@ fn build_brush(
 
 fn build_leaves<'a>(
     raw: &mut RawBsp,
-    textures: &Vec<Rc<Texture>>,
+    textures: &[Rc<Texture>],
 ) -> Vec<Leaf> {
     use itertools::*;
 
@@ -391,8 +384,6 @@ fn build_leaves<'a>(
                 let end = start + leaf.num_leaf_faces as usize;
                 start..end
             }].iter()
-            .map(|i| &faces[i.index as usize])
-            .map(|f| build_face(f, mesh_verts, textures))
         };
         let get_brushes = |leaf: &&RawLeaf| {
             leaf_brushes[{
@@ -400,7 +391,20 @@ fn build_leaves<'a>(
                 let end = start + leaf.num_leaf_brushes as usize;
                 start..end
             }].iter()
-            .map(|i| &brushes[i.index as usize])
+        };
+
+        let faces = group.iter()
+            .flat_map(get_faces)
+            .map(|lf| lf.index)
+            .unique()
+            .map(|i| &faces[i as usize])
+            .map(|f| build_face(f, mesh_verts, textures))
+            .collect::<Vec<_>>();
+        let brushes = group.iter()
+            .flat_map(get_brushes)
+            .map(|lb| lb.index)
+            .unique()
+            .map(|i| &brushes[i as usize])
             .map(|b| build_brush(
                     b,
                     brush_sides,
@@ -408,10 +412,7 @@ fn build_leaves<'a>(
                     raw_textures,
                 )
             )
-        };
-
-        let faces = group.iter().flat_map(get_faces).collect::<Vec<_>>();
-        let brushes = group.iter().flat_map(get_brushes).collect::<Vec<_>>();
+        .collect::<Vec<_>>();
 
         Some(Leaf {
             cluster: cluster as usize,
@@ -441,7 +442,7 @@ fn build_leaves<'a>(
 }
 
 fn get_bsp_tree_node(
-    i: i32, raw_leaves: &Vec<RawLeaf>, leaves: &Vec<Leaf>
+    i: i32, raw_leaves: &[RawLeaf], leaves: &[Leaf]
 ) -> BspTreeNode {
     if i < 0 {
         let leaf_index = (-i) as usize;
@@ -461,7 +462,7 @@ fn get_bsp_tree_node(
     }
 }
 
-fn build_nodes(raw: &mut RawBsp, leaves: &Vec<Leaf>) -> Vec<NonTerminal> {
+fn build_nodes(raw: &mut RawBsp, leaves: &[Leaf]) -> Vec<NonTerminal> {
     let planes = &raw.planes;
     raw.nodes.iter()
         .map(|n|
@@ -484,7 +485,7 @@ fn build_nodes(raw: &mut RawBsp, leaves: &Vec<Leaf>) -> Vec<NonTerminal> {
 }
 
 fn build_textures<T: Facade>(
-    raw: &Vec<RawTexture>,
+    raw: &[RawTexture],
     builder: &mut TextureBuilder<T>
 ) -> Result<Vec<Rc<Texture>>, ()> {
     let mut out = Vec::with_capacity(raw.len());
@@ -505,14 +506,14 @@ fn get_texture<T: Facade>(
     .or_else(||
          // TODO: Replace this with 𝘱𝘳𝘰𝘱𝘦𝘳 missingno texture
          builder.load(
-             &"textures/phdm5/metb_seam".into(),
+             &"textures/phdm5/metb_seam",
              raw.surface_flags.clone()
              )
         )
     .ok_or(())
 }
 
-fn get_string_hash(s: &String) -> u64 {
+fn get_string_hash(s: &str) -> u64 {
     use std::hash::{SipHasher, Hash, Hasher};
 
     let mut hasher = SipHasher::new();
