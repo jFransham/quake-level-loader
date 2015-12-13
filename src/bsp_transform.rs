@@ -368,12 +368,8 @@ fn build_leaves<'a>(
     let raw_textures = &raw.textures;
     let visibility_data = &raw.visibility_data;
     let mesh_verts = &raw.mesh_vertices;
-    raw.leaves.drain(..)
-        .filter_map(|l| {
-            if l.visdata_cluster < 0 {
-                return None;
-            }
-
+    raw.leaves.iter()
+        .map(|l| {
             let faces = leaf_faces[{
                     let start = l.first_leaf_face as usize;
                     let end = start + l.num_leaf_faces as usize;
@@ -397,19 +393,33 @@ fn build_leaves<'a>(
                 )
                 .collect::<Vec<_>>();
 
-            Some(Leaf {
-                visdata: get_indices(
-                    &visibility_data.raw_bytes[{
-                        let start = (l.visdata_cluster *
-                            visibility_data.sizeof_vector) as usize;
-                        let end = start +
-                            visibility_data.sizeof_vector as usize;
-                        start..end
-                    }]
-                ),
+            Leaf {
+                visdata: if l.visdata_cluster < 0 {
+                        vec![]
+                } else {
+                    get_indices(
+                        &visibility_data.raw_bytes[{
+                            let start = (l.visdata_cluster *
+                                         visibility_data.sizeof_vector) as usize;
+                            let end = start +
+                                visibility_data.sizeof_vector as usize;
+                            start..end
+                        }]
+                        ).into_iter()
+                    .flat_map(|i|
+                              raw.leaves.iter()
+                              .enumerate()
+                              .filter(|tup|
+                                      tup.1.visdata_cluster as usize == i
+                                     )
+                              .map(|(index, _)| index)
+                              .collect::<Vec<_>>()
+                             )
+                    .collect::<Vec<_>>()
+                },
                 faces: faces,
                 brushes: brushes,
-            })
+            }
         })
         .collect::<Vec<_>>()
 }

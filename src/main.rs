@@ -40,7 +40,7 @@ fn main() {
 
     let display = glium::glutin::WindowBuilder::new().build_glium().unwrap();
     let map = get_map(&display);
-    println!("{:?}", map.get_visible_set_at([0.0, 0.0, 0.0]));
+    println!("{:?}", map.get_visible_set_at([0.0, 0.0, 0.0]).len());
 }
 
 fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
@@ -49,7 +49,7 @@ fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
             "assets/trespass",
             f
         );
-    match parse_raw_bsp(TRESPASS) {
+    match parse_raw_bsp(WATER_GIANT) {
         Done(_, bsp)  => {
             // Ignore entities for now
             bsp_transform::build_bsp(
