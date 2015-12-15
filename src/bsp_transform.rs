@@ -1,7 +1,6 @@
 use std::mem::replace;
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
-use std::ops::Deref;
 use glium::backend::Facade;
 use texture_flags::*;
 use texture::*;
@@ -12,11 +11,9 @@ use raw_bsp::*;
 //       Remove all uses of [] & use try!(_.get(_)) instead
 
 pub struct Bsp {
-    node_owner: Vec<Rc<NonTerminal>>,
-    leaf_owner: Vec<Rc<Leaf>>,
     // For caching/etc. needs keep this separate and store indexes only
     pub vertices: Vec<Vertex>,
-    root: BspTreeNode,
+    root: Rc<NonTerminal>,
 }
 
 impl Bsp {
@@ -28,17 +25,12 @@ impl Bsp {
     }
 
     fn new(
-        node_owner: Vec<Rc<NonTerminal>>,
-        leaf_owner: Vec<Rc<Leaf>>,
+        root: NonTerminal,
         verts: Vec<Vertex>
     ) -> Bsp {
-        let root = BspTreeNode::NonTerminal(Rc::downgrade(&node_owner[0]));
-
         Bsp {
-            node_owner: node_owner,
-            leaf_owner: leaf_owner,
             vertices: verts,
-            root: root,
+            root: Rc::new(root),
         }
     }
 
@@ -49,18 +41,7 @@ impl Bsp {
     }
 
     fn get_terminal_at(&self, point: Vec3) -> Option<Rc<Leaf>> {
-        let mut current = match self.root {
-            BspTreeNode::NonTerminal(ref node_pntr) =>
-                if let Some(n) = node_pntr.upgrade() {
-                    n
-                } else {
-                    return None
-                },
-            BspTreeNode::Leaf(ref leaf_pntr) =>
-                return leaf_pntr.upgrade(),
-            BspTreeNode::Empty => return None,
-        };
-
+        let mut current = self.root.clone();
         loop {
             let dot = point.iter()
                 .zip(current.plane.normal.iter())
@@ -87,13 +68,9 @@ impl Bsp {
                     };
                 tmp = match *child {
                     BspTreeNode::NonTerminal(ref node_pntr) =>
-                        if let Some(n) = node_pntr.upgrade() {
-                                n
-                            } else {
-                                return None
-                            },
+                        node_pntr.clone(),
                     BspTreeNode::Leaf(ref leaf_pntr) =>
-                        return leaf_pntr.upgrade(),
+                        return Some(leaf_pntr.clone()),
                     BspTreeNode::Empty => return None,
                 };
             }
@@ -111,12 +88,14 @@ impl Bsp {
     }
 }
 
+#[derive(Debug)]
 enum BspTreeNode {
-    NonTerminal(Weak<NonTerminal>),
-    Leaf(Weak<Leaf>),
+    NonTerminal(Rc<NonTerminal>),
+    Leaf(Rc<Leaf>),
     Empty,
 }
 
+#[derive(Debug)]
 struct NonTerminal {
     plane: Plane,
     bounds: (IVec3, IVec3),
@@ -342,15 +321,14 @@ fn get_bsp_tree_node(
         let leaf_pntr = leaves.iter()
             .find(|l|
                 l.cluster == raw_leaves[leaf_index].visdata_cluster as usize
-            )
-            .map(|o| Rc::downgrade(o));
+            );
         if let Some(pntr) = leaf_pntr {
-            BspTreeNode::Leaf(pntr)
+            BspTreeNode::Leaf(pntr.clone())
         } else {
             BspTreeNode::Empty
         }
     } else {
-        BspTreeNode::NonTerminal(Rc::downgrade(&nodes[i as usize]))
+        BspTreeNode::NonTerminal(nodes[i as usize].clone())
     }
 }
 
@@ -417,20 +395,23 @@ pub fn build_bsp<'a, T: Facade>(
     mut raw: RawBsp,
     texture_builder: &mut TextureBuilder<T>
 ) -> (Vec<Entity>, Bsp) {
-    let tex = build_textures(
-            &raw.textures,
-            texture_builder
-        ).expect("Invalid map");
-    let ents = replace(&mut raw.entities, vec![]);
     let vertices = replace(&mut raw.vertices, vec![]);
-    let leaves = build_leaves(&mut raw, &tex);
-    let nodes = build_nodes(&mut raw, &leaves);
+    let ents = replace(&mut raw.entities, vec![]);
+    let root;
+    {
+        let tex = build_textures(
+                &raw.textures,
+                texture_builder
+            ).expect("Invalid map");
+        let leaves = build_leaves(&mut raw, &tex);
+        let nodes = build_nodes(&mut raw, &leaves);
+        root = nodes[0].clone();
+    }
 
     (
         ents,
         Bsp::new(
-            nodes,
-            leaves,
+            Rc::try_unwrap(root).expect("Bsp has circular nodegraph"),
             vertices
         )
     )

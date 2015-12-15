@@ -6,6 +6,7 @@ authors = ["Jack Fransham <jack.fransham@cuvva.co>"]
 [dependencies]
 nom = "^1.0.1"
 bitflags = "^0.3.3"
+eventual = "^0.1.4"
 itertools = "^0.4.3"
 glium = "^0.13.0"
 image = "^0.5.4"

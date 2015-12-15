@@ -10,6 +10,7 @@ extern crate bitflags;
 extern crate itertools;
 extern crate image;
 extern crate glium;
+extern crate eventual;
 
 #[macro_use]
 mod macros;
