@@ -1,11 +1,10 @@
-use std::path::PathBuf;
-use std::fs::PathExt;
 use std::mem::replace;
 use std::rc::{Rc, Weak};
-use glium::texture::Texture2d;
+use std::cell::RefCell;
+use std::ops::Deref;
 use glium::backend::Facade;
-use image;
 use texture_flags::*;
+use texture::*;
 use helpers::*;
 use raw_bsp::*;
 
@@ -13,15 +12,15 @@ use raw_bsp::*;
 //       Remove all uses of [] & use try!(_.get(_)) instead
 
 pub struct Bsp {
-    node_owner: Vec<NonTerminal>,
-    leaf_owner: Vec<Leaf>,
+    node_owner: Vec<Rc<NonTerminal>>,
+    leaf_owner: Vec<Rc<Leaf>>,
     // For caching/etc. needs keep this separate and store indexes only
     pub vertices: Vec<Vertex>,
     root: BspTreeNode,
 }
 
 impl Bsp {
-    pub fn get_visible_set_at(&self, point: Vec3) -> Vec<&Leaf> {
+    pub fn get_visible_set_at(&self, point: Vec3) -> Vec<Rc<Leaf>> {
         self.get_terminal_at(point).map_or(
             vec![],
             |t| self.get_visible_set_of(t)
@@ -29,15 +28,17 @@ impl Bsp {
     }
 
     fn new(
-        node_owner: Vec<NonTerminal>,
-        leaf_owner: Vec<Leaf>,
+        node_owner: Vec<Rc<NonTerminal>>,
+        leaf_owner: Vec<Rc<Leaf>>,
         verts: Vec<Vertex>
     ) -> Bsp {
+        let root = BspTreeNode::NonTerminal(Rc::downgrade(&node_owner[0]));
+
         Bsp {
             node_owner: node_owner,
             leaf_owner: leaf_owner,
             vertices: verts,
-            root: BspTreeNode::NonTerminal(0)
+            root: root,
         }
     }
 
@@ -47,43 +48,63 @@ impl Bsp {
         unimplemented!()
     }
 
-    fn get_terminal_at(&self, point: Vec3) -> Option<&Leaf> {
-        let mut current = &self.root;
-        while let &BspTreeNode::NonTerminal(node_index) = current {
-            let node = &self.node_owner[node_index];
+    fn get_terminal_at(&self, point: Vec3) -> Option<Rc<Leaf>> {
+        let mut current = match self.root {
+            BspTreeNode::NonTerminal(ref node_pntr) =>
+                if let Some(n) = node_pntr.upgrade() {
+                    n
+                } else {
+                    return None
+                },
+            BspTreeNode::Leaf(ref leaf_pntr) =>
+                return leaf_pntr.upgrade(),
+            BspTreeNode::Empty => return None,
+        };
+
+        loop {
             let dot = point.iter()
-                .zip(node.plane.normal.iter())
+                .zip(current.plane.normal.iter())
                 .map(|(a, b)| a * b)
                 .sum::<f32>();
 
             if izip!(
                 point.iter(),
-                node.bounds.0.iter(),
-                node.bounds.1.iter()
+                current.bounds.0.iter(),
+                current.bounds.1.iter()
             ).any(
                 |(&p, &min, &max)| p < min as f32 || p > max as f32
             ) {
                 return None;
             }
 
-            current =
-                if dot < node.plane.distance {
-                    &node.back
-                } else {
-                    &node.front
-                }
-        }
+            let tmp;
+            {
+                let child =
+                    if dot < current.plane.distance {
+                        current.back.borrow()
+                    } else {
+                        current.front.borrow()
+                    };
+                tmp = match *child {
+                    BspTreeNode::NonTerminal(ref node_pntr) =>
+                        if let Some(n) = node_pntr.upgrade() {
+                                n
+                            } else {
+                                return None
+                            },
+                    BspTreeNode::Leaf(ref leaf_pntr) =>
+                        return leaf_pntr.upgrade(),
+                    BspTreeNode::Empty => return None,
+                };
+            }
 
-        if let &BspTreeNode::Leaf(leaf_index) = current {
-            Some(&self.leaf_owner[leaf_index])
-        } else {
-            None
+            current = tmp;
         }
     }
 
-    fn get_visible_set_of<'a>(&'a self, leaf: &'a Leaf) -> Vec<&'a Leaf> {
-        let mut out = leaf.visdata.iter()
-            .map(|&i| &self.leaf_owner[i])
+    fn get_visible_set_of(&self, leaf: Rc<Leaf>) -> Vec<Rc<Leaf>> {
+        let mut out = leaf.visdata.borrow().iter()
+            .filter_map(|i| i.upgrade())
             .collect::<Vec<_>>();
         out.push(leaf);
         out
@@ -91,22 +112,22 @@ impl Bsp {
 }
 
 enum BspTreeNode {
-    NonTerminal(usize),
-    Leaf(usize),
+    NonTerminal(Weak<NonTerminal>),
+    Leaf(Weak<Leaf>),
     Empty,
 }
 
 struct NonTerminal {
     plane: Plane,
     bounds: (IVec3, IVec3),
-    front: BspTreeNode,
-    back: BspTreeNode,
+    front: RefCell<BspTreeNode>,
+    back: RefCell<BspTreeNode>,
 }
 
 #[derive(Debug)]
 pub struct Leaf {
     cluster: usize,
-    visdata: Vec<usize>,
+    visdata: RefCell<Vec<Weak<Leaf>>>,
     pub faces: Vec<Face>,
     pub brushes: Vec<Brush>,
 }
@@ -122,145 +143,6 @@ struct Surface {
     plane: Plane,
     surface_flags: SurfaceFlags,
 }
-
-#[derive(Debug)]
-pub struct Texture {
-    hash: u64,
-    texture: Texture2d,
-    surface_flags: SurfaceFlags,
-}
-
-// TODO: make this take a root directory
-pub struct TextureBuilder<'a, T: Facade + 'a> {
-    root: PathBuf,
-    facade: &'a T,
-    cache: Vec<Weak<Texture>>,
-}
-
-impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
-    pub fn new<A: Into<PathBuf>>(a: A, facade: &'a T) -> TextureBuilder<'a, T> {
-        TextureBuilder { root: a.into(), facade: facade, cache: vec![] }
-    }
-
-    fn get_real_path_and_ext(
-        &self,
-        path: &str
-    ) -> Option<(image::ImageFormat, PathBuf)> {
-        use image::ImageFormat;
-        use image::ImageFormat::*;
-
-        fn get_extensions(i: &ImageFormat) -> &'static [&'static str] {
-            static PNG_EXT:  [&'static str; 1] = ["png"];
-            static JPEG_EXT: [&'static str; 2] = ["jpeg", "jpg"];
-            static GIF_EXT:  [&'static str; 1] = ["gif"];
-            static WEBP_EXT: [&'static str; 1] = ["webp"];
-            static PPM_EXT:  [&'static str; 1] = ["ppm"];
-            static TIFF_EXT: [&'static str; 1] = ["tiff"];
-            static TGA_EXT:  [&'static str; 1] = ["tga"];
-            static BMP_EXT:  [&'static str; 1] = ["bmp"];
-            static ICO_EXT:  [&'static str; 1] = ["ico"];
-
-            match *i {
-                PNG  => &PNG_EXT,
-                JPEG => &JPEG_EXT,
-                GIF  => &GIF_EXT,
-                WEBP => &WEBP_EXT,
-                PPM  => &PPM_EXT,
-                TIFF => &TIFF_EXT,
-                TGA  => &TGA_EXT,
-                BMP  => &BMP_EXT,
-                ICO  => &ICO_EXT,
-            }
-        }
-
-        let root: PathBuf = self.root.join(path);
-        let file_name: String =
-            if let Some(Some(f)) = root.file_name().map(|o| o.to_str()) {
-                f.into()
-            } else {
-                return None
-            };
-        for ex in [PNG, JPEG, GIF, WEBP, PPM, TIFF, TGA, BMP, ICO].into_iter() {
-            let extensions = get_extensions(&ex);
-
-            for str_ex in extensions {
-                let out = root.with_file_name(format!("{}.{}", file_name, str_ex));
-
-                if out.is_file() { return Some((*ex, out.to_path_buf())); }
-            }
-        }
-
-        None
-    }
-
-    pub fn load(
-        &mut self, path: &str, surface_flags: SurfaceFlags
-    ) -> Option<Rc<Texture>> {
-        use std::io::BufReader;
-        use std::fs::File;
-        use glium::texture::RawImage2d;
-        use image;
-
-        let str_hash = get_string_hash(path);
-        if let Some(t) = self.cache.iter()
-            .filter_map(|weak| weak.upgrade())
-            .find(
-                |t| t.hash == str_hash
-            )
-        {
-            return Some(t);
-        }
-
-        let (ext, real_path) =
-            if let Some(tup) = self.get_real_path_and_ext(path) {
-                tup
-            } else {
-                println!("{} not found", path);
-                return None
-            };
-
-        let f = if let Ok(a) = File::open(&real_path) {
-                a
-            } else {
-                println!("Cannot open {:?}", &real_path);
-                return None
-            };
-        let reader = BufReader::new(f);
-
-        let raw = if let Ok(a) = image::load(
-                reader,
-                ext
-            ) {
-                a.to_rgba()
-            } else {
-                println!("Cannot interpret {:?}", &real_path);
-                return None
-            };
-        let image_dimensions = raw.dimensions();
-        let image = RawImage2d::from_raw_rgba_reversed(
-                raw.into_raw(), image_dimensions
-            );
-        Texture2d::new(self.facade, image).ok()
-            .map(|t| {
-                let out = Rc::new(
-                    Texture {
-                        hash: get_string_hash(path),
-                        texture: t,
-                        surface_flags: surface_flags
-                    }
-                );
-                self.cache.push(Rc::downgrade(&out));
-                out
-            })
-    }
-}
-
-impl PartialEq for Texture {
-    fn eq(&self, other: &Self) -> bool { self.hash == other.hash }
-}
-
-impl Eq for Texture {}
-
 #[derive(Debug)]
 pub struct Brush {
     surfaces: Vec<Surface>,
@@ -353,7 +235,7 @@ fn build_brush(
 fn build_leaves<'a>(
     raw: &mut RawBsp,
     textures: &[Rc<Texture>],
-) -> Vec<Leaf> {
+) -> Vec<Rc<Leaf>> {
     use itertools::*;
 
     let faces = &raw.faces;
@@ -372,7 +254,7 @@ fn build_leaves<'a>(
                     .into_iter()
                     .group_by(|l| l.visdata_cluster)
                     .collect::<Vec<_>>();
-    clusters.iter().filter_map(|&(cluster, ref group)| {
+    let out = clusters.iter().filter_map(|&(cluster, ref group)| {
         if cluster < 0 {
             return None
         }
@@ -414,74 +296,93 @@ fn build_leaves<'a>(
             )
         .collect::<Vec<_>>();
 
-        Some(Leaf {
+        Some(Rc::new(Leaf {
             cluster: cluster as usize,
-            visdata: get_indices(
-                    &visibility_data.raw_bytes[{
-                        let start = (cluster *
-                                     visibility_data.sizeof_vector) as usize;
-                        let end = start +
-                            visibility_data.sizeof_vector as usize;
-                        start..end
-                    }]).into_iter()
-                .flat_map(|i|
-                          clusters.iter()
-                          .enumerate()
-                          .filter(|&(cluster, _)|
-                              cluster == i
-                          )
-                          .map(|(index, _)| index)
-                          .collect::<Vec<_>>()
-                         )
-                .collect::<Vec<_>>(),
+            visdata: RefCell::new(vec![]),
             faces: faces,
             brushes: brushes,
-        })
+        }))
     })
-    .collect::<Vec<_>>()
+    .collect::<Vec<_>>();
+
+    for l in &out {
+        *l.visdata.borrow_mut() = get_indices(
+            &visibility_data.raw_bytes[{
+                let start = l.cluster *
+                    visibility_data.sizeof_vector as usize;
+                let end = start +
+                    visibility_data.sizeof_vector as usize;
+                start..end
+            }]
+        ).into_iter()
+            .flat_map(|i|
+                out.iter()
+                .filter(|l|
+                    l.cluster == i
+                )
+                .map(|leaf|
+                    Rc::downgrade(&leaf)
+                )
+                .collect::<Vec<_>>()
+            )
+            .collect::<Vec<_>>()
+    }
+
+    out
 }
 
 fn get_bsp_tree_node(
-    i: i32, raw_leaves: &[RawLeaf], leaves: &[Leaf]
+    i: i32,
+    raw_leaves: &[RawLeaf],
+    leaves: &[Rc<Leaf>],
+    nodes: &[Rc<NonTerminal>]
 ) -> BspTreeNode {
     if i < 0 {
         let leaf_index = (-i) as usize;
-        let actual_index = leaves.iter()
-            .enumerate()
-            .find(|&(_, l)|
-                raw_leaves[leaf_index].visdata_cluster as usize == l.cluster
+        let leaf_pntr = leaves.iter()
+            .find(|l|
+                l.cluster == raw_leaves[leaf_index].visdata_cluster as usize
             )
-            .map(|o| o.0);
-        if let Some(index) = actual_index {
-            BspTreeNode::Leaf(index)
+            .map(|o| Rc::downgrade(o));
+        if let Some(pntr) = leaf_pntr {
+            BspTreeNode::Leaf(pntr)
         } else {
             BspTreeNode::Empty
         }
     } else {
-        BspTreeNode::NonTerminal(i as usize)
+        BspTreeNode::NonTerminal(Rc::downgrade(&nodes[i as usize]))
     }
 }
 
-fn build_nodes(raw: &mut RawBsp, leaves: &[Leaf]) -> Vec<NonTerminal> {
+fn build_nodes(raw: &mut RawBsp, leaves: &[Rc<Leaf>]) -> Vec<Rc<NonTerminal>> {
     let planes = &raw.planes;
-    raw.nodes.iter()
+    let out = raw.nodes.iter()
         .map(|n|
-            NonTerminal {
+            Rc::new(NonTerminal {
                 plane: planes[n.plane_index as usize].clone(),
                 bounds: (n.min.clone(), n.max.clone()),
-                front: get_bsp_tree_node(
-                    n.children_indices.0,
-                    &raw.leaves,
-                    leaves
-                ),
-                back: get_bsp_tree_node(
-                    n.children_indices.1,
-                    &raw.leaves,
-                    leaves
-                ),
-            }
+                front: RefCell::new(BspTreeNode::Empty),
+                back: RefCell::new(BspTreeNode::Empty),
+            })
         )
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+
+    for (n, r) in out.iter().zip(raw.nodes.iter()) {
+        *n.front.borrow_mut() = get_bsp_tree_node(
+            r.children_indices.0,
+            &raw.leaves,
+            leaves,
+            &out
+        );
+        *n.back.borrow_mut() = get_bsp_tree_node(
+            r.children_indices.1,
+            &raw.leaves,
+            leaves,
+            &out
+        );
+    }
+
+    out
 }
 
 fn build_textures<T: Facade>(
@@ -504,21 +405,12 @@ fn get_texture<T: Facade>(
         raw.surface_flags.clone()
         )
     .or_else(||
-         // TODO: Replace this with 𝘱𝘳𝘰𝘱𝘦𝘳 missingno texture
          builder.load(
-             &"textures/phdm5/metb_seam",
+             &"textures/common/missing",
              raw.surface_flags.clone()
              )
         )
     .ok_or(())
-}
-
-fn get_string_hash(s: &str) -> u64 {
-    use std::hash::{SipHasher, Hash, Hasher};
-
-    let mut hasher = SipHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
 }
 
 pub fn build_bsp<'a, T: Facade>(

@@ -19,9 +19,11 @@ mod helpers;
 mod raw_bsp;
 mod raw_bsp_parsers;
 mod texture_flags;
+mod texture;
 
 use nom::IResult::*;
 use raw_bsp_parsers::*;
+use texture::*;
 
 pub const SIMPLE_DM5: &'static [u8] = include_bytes!(
     "../assets/simple-dm5.bsp"
@@ -43,11 +45,11 @@ fn main() {
 
 fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
     let mut builder =
-        bsp_transform::TextureBuilder::new(
-            "assets/trespass",
+        TextureBuilder::new(
+            vec!["assets/trespass"],
             f
         );
-    match parse_raw_bsp(TRESPASS) {
+    match parse_raw_bsp(WATER_GIANT) {
         Done(_, bsp)  => {
             // Ignore entities for now
             bsp_transform::build_bsp(
