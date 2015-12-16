@@ -231,9 +231,8 @@ fn build_leaves<'a>(
                         a.visdata_cluster.cmp(&b.visdata_cluster)
                     )
                     .into_iter()
-                    .group_by(|l| l.visdata_cluster)
-                    .collect::<Vec<_>>();
-    let out = clusters.iter().filter_map(|&(cluster, ref group)| {
+                    .group_by(|l| l.visdata_cluster);
+    let out = clusters.filter_map(|(cluster, ref group)| {
         if cluster < 0 {
             return None
         }
@@ -294,16 +293,15 @@ fn build_leaves<'a>(
                 start..end
             }]
         ).into_iter()
-            .flat_map(|i|
+            .flat_map(|i| {
                 out.iter()
-                .filter(|l|
+                .filter(move |l|
                     l.cluster == i
                 )
                 .map(|leaf|
                     Rc::downgrade(&leaf)
                 )
-                .collect::<Vec<_>>()
-            )
+            })
             .collect::<Vec<_>>()
     }
 
@@ -367,6 +365,24 @@ fn build_textures<T: Facade>(
     raw: &[RawTexture],
     builder: &mut TextureBuilder<T>
 ) -> Result<Vec<Rc<Texture>>, ()> {
+    let texdata = raw.iter()
+        .map(|r| (r.path.clone(), r.surface_flags))
+        .collect::<Vec<_>>();
+    let mut out = vec![];
+    for opt in builder.load_async(texdata) {
+        if let Some(tex) = opt {
+            out.push(tex);
+        } else {
+            return Err(());
+        }
+    }
+    Ok(out)
+}
+
+fn build_textures_sync<T: Facade>(
+    raw: &[RawTexture],
+    builder: &mut TextureBuilder<T>
+) -> Result<Vec<Rc<Texture>>, ()> {
     let mut out = Vec::with_capacity(raw.len());
     for res in raw.iter().map(|r| get_texture(r, builder)) {
         try!(res.map(|t| out.push(t)));
@@ -399,12 +415,23 @@ pub fn build_bsp<'a, T: Facade>(
     let ents = replace(&mut raw.entities, vec![]);
     let root;
     {
+        println!("Start loading textures");
         let tex = build_textures(
                 &raw.textures,
                 texture_builder
-            ).expect("Invalid map");
+            ).or_else(|_|
+                build_textures_sync(
+                    &raw.textures,
+                    texture_builder
+                )
+            ).expect("Missing texture is missing");
+        println!("End loading textures");
+        println!("Start building leaves");
         let leaves = build_leaves(&mut raw, &tex);
+        println!("End building leaves");
+        println!("Start building nodes");
         let nodes = build_nodes(&mut raw, &leaves);
+        println!("End building nodes");
         root = nodes[0].clone();
     }
 
@@ -415,4 +442,58 @@ pub fn build_bsp<'a, T: Facade>(
             vertices
         )
     )
+}
+
+mod test {
+    extern crate test;
+
+    use self::test::Bencher;
+    use super::{build_textures, build_textures_sync};
+    use texture::*;
+    use texture_flags::*;
+    use raw_bsp::*;
+    use glium::{self, DisplayBuild};
+
+    #[bench]
+    pub fn bench_texture_loader(b: &mut Bencher) {
+        let raw = vec![
+            RawTexture {
+                path: "textures/phdm5/metb".into(),
+                surface_flags: SurfaceFlags::empty(),
+                content_flags: ContentFlags::empty(),
+            },
+            RawTexture {
+                path: "textures/phdm5/metb".into(),
+                surface_flags: SurfaceFlags::empty(),
+                content_flags: ContentFlags::empty(),
+            },
+            RawTexture {
+                path: "textures/phdm5/brick1a".into(),
+                surface_flags: SurfaceFlags::empty(),
+                content_flags: ContentFlags::empty(),
+            },
+            RawTexture {
+                path: "not/a/real/texture".into(),
+                surface_flags: SurfaceFlags::empty(),
+                content_flags: ContentFlags::empty(),
+            },
+        ];
+        let display = glium::glutin::WindowBuilder::new().build_glium().unwrap();
+        let ref mut builder =
+            TextureBuilder::new(
+                vec!["assets/trespass"],
+                &display
+            );
+        b.iter(|| {
+            build_textures(
+                &raw,
+                builder
+            ).or_else(|_|
+                build_textures_sync(
+                    &raw,
+                    builder
+                )
+            ).expect("Missing texture is missing");
+        });
+    }
 }

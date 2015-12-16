@@ -1,22 +1,15 @@
-use glium::texture::Texture2d;
 use glium::backend::Facade;
+use glium::texture::{Texture2d, RawImage2d};
+use std::sync::Arc;
 use std::rc::{Rc, Weak};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use texture_flags::*;
 use std::fs::PathExt;
 use image;
 
-fn get_string_hash(s: &str) -> u64 {
-    use std::hash::{SipHasher, Hash, Hasher};
-
-    let mut hasher = SipHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
-
 #[derive(Debug)]
 pub struct Texture {
-    hash: u64,
     texture: Texture2d,
     surface_flags: SurfaceFlags,
 }
@@ -27,9 +20,9 @@ pub struct Texture {
 //       -- use enum with root (Vec<pathbuf>, facade, cache) or
 //          inherit(texturebuilder, pathbuf)
 pub struct TextureBuilder<'a, T: Facade + 'a> {
-    roots: Vec<PathBuf>,
+    roots: Arc<Vec<PathBuf>>,
     facade: &'a T,
-    cache: Vec<Weak<Texture>>,
+    cache: HashMap<String, Weak<Texture>>,
 }
 
 impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
@@ -37,14 +30,16 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         a: I, facade: &'a T
     ) -> TextureBuilder<'a, T> {
         TextureBuilder {
-            roots: a.into_iter().map(|e| e.into()).collect::<Vec<_>>(),
+            roots: Arc::new(
+                a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
+            ),
             facade: facade,
-            cache: vec![]
+            cache: HashMap::new()
         }
     }
 
     fn get_real_path_and_ext(
-        &self,
+        roots: &[PathBuf],
         path: &str
     ) -> Option<(image::ImageFormat, PathBuf)> {
         use image::ImageFormat;
@@ -74,7 +69,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             }
         }
 
-        for root in &self.roots {
+        for root in roots {
             let root: PathBuf = root.join(path);
             let file_name: String =
                 if let Some(Some(f)) = root.file_name().map(|o| o.to_str()) {
@@ -96,26 +91,110 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         None
     }
 
+    fn find_in_cache(&self, hash: String) -> Option<Rc<Texture>> {
+        self.cache.get(&hash).and_then(|weak| weak.upgrade())
+    }
+
     pub fn load(
         &mut self, path: &str, surface_flags: SurfaceFlags
     ) -> Option<Rc<Texture>> {
+        self.find_in_cache(path.into()).or_else(||
+            Self::load_inner(self.roots.clone(), path).and_then(|image|
+                Texture2d::new(self.facade, image).ok()
+                    .map(|t| {
+                        let out = Rc::new(
+                            Texture {
+                                texture: t,
+                                surface_flags: surface_flags
+                            }
+                        );
+                        self.cache.insert(path.into(), Rc::downgrade(&out));
+                        out
+                    })
+            )
+        )
+    }
+
+    pub fn load_async(
+        &mut self, many: Vec<(String, SurfaceFlags)>
+    ) -> Vec<Option<Rc<Texture>>> {
+        use eventual::*;
+        use itertools::*;
+
+        let cached = many.iter()
+            .enumerate()
+            .map(|(i, &(ref path, flags))|
+                (i, path.clone(), flags, self.find_in_cache(path.clone()))
+            )
+            .collect::<Vec<_>>();
+        let promises =
+            cached.iter()
+            .cloned()
+            .filter_map(|(n, path, flags, opt)|
+                if opt.is_none() {
+                    let rclone = self.roots.clone();
+                    Some(Future::spawn(move || {
+                        let load = Self::load_inner(rclone, &path);
+                        (
+                            n,
+                            path,
+                            flags,
+                            load,
+                        )
+                    }))
+                } else {
+                    None
+                }
+            )
+            .collect::<Vec<_>>();
+        let textures = join(
+            promises
+        ).await()
+        .unwrap()
+        .into_iter()
+        .map(|(n, path, flags, raw)|
+            (
+                n,
+                raw.and_then(|image|
+                    Texture2d::new(self.facade, image).ok()
+                        .map(|t| {
+                            let out = Rc::new(
+                                Texture {
+                                    texture: t,
+                                    surface_flags: flags,
+                                }
+                            );
+                            self.cache.insert(path.into(), Rc::downgrade(&out));
+                            out
+                        })
+                ),
+            )
+        )
+        .collect::<Vec<_>>();
+
+        cached.into_iter()
+            .filter_map(|(n, _, _, maybe_tex)|
+                maybe_tex.map(|t| (n, Some(t)))
+            )
+            .chain(textures.into_iter())
+            .sorted_by(|a, b| a.0.cmp(&b.0))
+            .into_iter()
+            .zip(0..)
+            .map(|((n, t), i)| {
+                 debug_assert!(n==i);
+                 t
+            })
+            .collect::<Vec<_>>()
+    }
+
+    fn load_inner<'b: 'a>(
+        roots: Arc<Vec<PathBuf>>, path: &str
+    ) -> Option<RawImage2d<'b, u8>> {
         use std::io::BufReader;
         use std::fs::File;
-        use glium::texture::RawImage2d;
-        use image;
-
-        let str_hash = get_string_hash(path);
-        if let Some(t) = self.cache.iter()
-            .filter_map(|weak| weak.upgrade())
-            .find(
-                |t| t.hash == str_hash
-            )
-        {
-            return Some(t);
-        }
 
         let (ext, real_path) =
-            if let Some(tup) = self.get_real_path_and_ext(path) {
+            if let Some(tup) = Self::get_real_path_and_ext(&*roots, path) {
                 tup
             } else {
                 println!("{} not found", path);
@@ -125,7 +204,6 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         let f = if let Ok(a) = File::open(&real_path) {
                 a
             } else {
-                println!("Cannot open {:?}", &real_path);
                 return None
             };
         let reader = BufReader::new(f);
@@ -136,31 +214,13 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             ) {
                 a.to_rgba()
             } else {
-                println!("Cannot interpret {:?}", &real_path);
                 return None
             };
         let image_dimensions = raw.dimensions();
-        let image = RawImage2d::from_raw_rgba_reversed(
+        Some(
+            RawImage2d::from_raw_rgba_reversed(
                 raw.into_raw(), image_dimensions
-            );
-        Texture2d::new(self.facade, image).ok()
-            .map(|t| {
-                let out = Rc::new(
-                    Texture {
-                        hash: get_string_hash(path),
-                        texture: t,
-                        surface_flags: surface_flags
-                    }
-                );
-                self.cache.push(Rc::downgrade(&out));
-                out
-            })
+            )
+        )
     }
 }
-
-impl PartialEq for Texture {
-    fn eq(&self, other: &Self) -> bool { self.hash == other.hash }
-}
-
-impl Eq for Texture {}
-
