@@ -369,7 +369,7 @@ fn build_textures<T: Facade>(
         .map(|r| (r.path.clone(), r.surface_flags))
         .collect::<Vec<_>>();
     let mut out = vec![];
-    for opt in builder.load_async("textures/common/missing".into(), texdata) {
+    for opt in builder.load_async(texdata) {
         if let Some(tex) = opt {
             out.push(tex);
         } else {

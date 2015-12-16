@@ -51,7 +51,7 @@ fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
             f,
             "textures/common/missing".into()
         );
-    match parse_raw_bsp(TRESPASS) {
+    match parse_raw_bsp(WATER_GIANT) {
         Done(_, bsp)  => {
             // Ignore entities for now
             bsp_transform::build_bsp(

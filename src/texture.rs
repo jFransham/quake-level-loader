@@ -21,6 +21,7 @@ pub struct Texture {
 //          inherit(texturebuilder, pathbuf)
 pub struct TextureBuilder<'a, T: Facade + 'a> {
     roots: Arc<Vec<PathBuf>>,
+    missing: String,
     facade: &'a T,
     cache: HashMap<String, Weak<Texture>>,
 }
@@ -33,6 +34,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             roots: Arc::new(
                 a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
             ),
+            missing: ms.clone(),
             facade: facade,
             cache: HashMap::new()
         };
@@ -118,7 +120,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     }
 
     pub fn load_async(
-        &mut self, missing: String, many: Vec<(String, SurfaceFlags)>
+        &mut self, many: Vec<(String, SurfaceFlags)>
     ) -> Vec<Option<Rc<Texture>>> {
         use eventual::*;
         use itertools::*;
@@ -135,7 +137,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             .filter_map(|(n, path, flags, opt)|
                 if opt.is_none() {
                     let rclone = self.roots.clone();
-                    let msclone = missing.clone();
+                    let msclone = self.missing.clone();
                     Some(Future::spawn(move || {
                         let load = Self::load_inner(rclone.clone(), &path)
                             .or_else(|| Self::load_inner(rclone, &msclone));
