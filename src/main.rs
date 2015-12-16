@@ -1,4 +1,4 @@
-#![feature(test)]
+#![cfg_attr(test, feature(test))]
 #![feature(iter_arith)]
 #![feature(path_ext)]
 
@@ -49,7 +49,7 @@ fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
         TextureBuilder::new(
             vec!["assets/trespass"],
             f,
-            "textures/common/missing".into()
+            Some("textures/common/missing".into())
         );
     match parse_raw_bsp(WATER_GIANT) {
         Done(_, bsp)  => {

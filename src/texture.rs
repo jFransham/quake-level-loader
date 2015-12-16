@@ -1,17 +1,38 @@
+// TODO: Make TextureBuilder completely ignorant of the Texture struct,
+//       load Texture2d's instead.
+
 use glium::backend::Facade;
 use glium::texture::{Texture2d, RawImage2d};
-use std::sync::Arc;
-use std::rc::{Rc, Weak};
+use std::sync::{Arc, Weak};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use texture_flags::*;
 use std::fs::PathExt;
 use image;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Texture {
-    texture: Texture2d,
+    texture: Arc<Texture2d>,
     surface_flags: SurfaceFlags,
+}
+
+pub trait CreateTexture {
+    fn create_texture(self, flags: SurfaceFlags) -> Texture;
+}
+
+impl CreateTexture for Arc<Texture2d> {
+    fn create_texture(self, flags: SurfaceFlags) -> Texture {
+        Texture {
+            texture: self,
+            surface_flags: flags,
+        }
+    }
+}
+
+impl CreateTexture for Texture2d {
+    fn create_texture(self, flags: SurfaceFlags) -> Texture {
+        Arc::new(self).create_texture(flags)
+    }
 }
 
 // TODO: make this take a list of root directories
@@ -21,25 +42,23 @@ pub struct Texture {
 //          inherit(texturebuilder, pathbuf)
 pub struct TextureBuilder<'a, T: Facade + 'a> {
     roots: Arc<Vec<PathBuf>>,
-    missing: String,
+    missing: Option<String>,
     facade: &'a T,
-    cache: HashMap<String, Weak<Texture>>,
+    cache: HashMap<String, Weak<Texture2d>>,
 }
 
 impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     pub fn new<A: Into<PathBuf>, I: IntoIterator<Item=A>>(
-        a: I, facade: &'a T, ms: String
+        a: I, facade: &'a T, ms: Option<String>
     ) -> TextureBuilder<'a, T> {
-        let mut out = TextureBuilder {
+        TextureBuilder {
             roots: Arc::new(
                 a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
             ),
             missing: ms.clone(),
             facade: facade,
             cache: HashMap::new()
-        };
-        out.load(&ms, SurfaceFlags::empty());
-        out
+        }
     }
 
     fn get_real_path_and_ext(
@@ -95,24 +114,19 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         None
     }
 
-    fn find_in_cache(&self, hash: String) -> Option<Rc<Texture>> {
+    fn find_in_cache(&self, hash: String) -> Option<Arc<Texture2d>> {
         self.cache.get(&hash).and_then(|weak| weak.upgrade())
     }
 
     pub fn load(
-        &mut self, path: &str, surface_flags: SurfaceFlags
-    ) -> Option<Rc<Texture>> {
+        &mut self, path: &str
+    ) -> Option<Arc<Texture2d>> {
         self.find_in_cache(path.into()).or_else(||
             Self::load_inner(self.roots.clone(), path).and_then(|image|
                 Texture2d::new(self.facade, image).ok()
                     .map(|t| {
-                        let out = Rc::new(
-                            Texture {
-                                texture: t,
-                                surface_flags: surface_flags
-                            }
-                        );
-                        self.cache.insert(path.into(), Rc::downgrade(&out));
+                        let out = Arc::new(t);
+                        self.cache.insert(path.into(), Arc::downgrade(&out));
                         out
                     })
             )
@@ -120,31 +134,34 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     }
 
     pub fn load_async(
-        &mut self, many: Vec<(String, SurfaceFlags)>
-    ) -> Vec<Option<Rc<Texture>>> {
+        &mut self, many: Vec<String>
+    ) -> Vec<Option<Arc<Texture2d>>> {
         use eventual::*;
         use itertools::*;
 
         let cached = many.iter()
             .enumerate()
-            .map(|(i, &(ref path, flags))|
-                (i, path.clone(), flags, self.find_in_cache(path.clone()))
+            .map(|(i, path)|
+                (i, path.clone(), self.find_in_cache(path.clone()))
             )
             .collect::<Vec<_>>();
         let promises =
             cached.iter()
             .cloned()
-            .filter_map(|(n, path, flags, opt)|
+            .filter_map(|(n, path, opt)|
                 if opt.is_none() {
                     let rclone = self.roots.clone();
                     let msclone = self.missing.clone();
                     Some(Future::spawn(move || {
                         let load = Self::load_inner(rclone.clone(), &path)
-                            .or_else(|| Self::load_inner(rclone, &msclone));
+                            .or_else(||
+                                msclone.and_then(|inner|
+                                    Self::load_inner(rclone, &inner)
+                                )
+                            );
                         (
                             n,
                             path,
-                            flags,
                             load,
                         )
                     }))
@@ -158,19 +175,14 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         ).await()
         .unwrap()
         .into_iter()
-        .map(|(n, path, flags, raw)|
+        .map(|(n, path, raw)|
             (
                 n,
                 raw.and_then(|image|
                     Texture2d::new(self.facade, image).ok()
                         .map(|t| {
-                            let out = Rc::new(
-                                Texture {
-                                    texture: t,
-                                    surface_flags: flags,
-                                }
-                            );
-                            self.cache.insert(path.into(), Rc::downgrade(&out));
+                            let out = Arc::new(t);
+                            self.cache.insert(path.into(), Arc::downgrade(&out));
                             out
                         })
                 ),
@@ -179,7 +191,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         .collect::<Vec<_>>();
 
         cached.into_iter()
-            .filter_map(|(n, _, _, maybe_tex)|
+            .filter_map(|(n, _, maybe_tex)|
                 maybe_tex.map(|t| (n, Some(t)))
             )
             .chain(textures.into_iter())

@@ -173,7 +173,7 @@ pub struct LightVolume {
     pub direction: RotationDirection,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RawVisibilityData {
     pub num_vectors: i32,
     pub sizeof_vector: i32,

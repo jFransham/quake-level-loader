@@ -10,6 +10,7 @@ use raw_bsp::*;
 // TODO: IMPORTANT HOLY SHIT 𝘋𝘖 𝘕𝘖𝘛 𝘍𝘖𝘙𝘎𝘌𝘛!
 //       Remove all uses of [] & use try!(_.get(_)) instead
 
+// TODO: Make this return &Leaf instead of Rc<Leaf>
 pub struct Bsp {
     // For caching/etc. needs keep this separate and store indexes only
     pub vertices: Vec<Vertex>,
@@ -34,9 +35,9 @@ impl Bsp {
         }
     }
 
-    fn get_collision_planes_between(
+    fn get_surfaces_between(
         &self, bounds: (Vec3, Vec3)
-    ) -> Vec<&Plane> {
+    ) -> Vec<&Surface> {
         unimplemented!()
     }
 
@@ -103,6 +104,8 @@ struct NonTerminal {
     back: RefCell<BspTreeNode>,
 }
 
+// TODO: Make this thread-safe. RefCell is only referenced on initialisation
+//       so it is safe to send, but the Weak is non-atomic.
 #[derive(Debug)]
 pub struct Leaf {
     cluster: usize,
@@ -113,7 +116,7 @@ pub struct Leaf {
 
 #[derive(Debug)]
 pub struct Face {
-    texture: Rc<Texture>,
+    texture: Texture,
     render_type: FaceRenderType,
 }
 
@@ -146,7 +149,7 @@ fn get_indices(visdata: &[u8]) -> Vec<usize> {
 fn build_face(
     face: &RawFace,
     mesh_verts: &[RawMeshVertex],
-    textures: &[Rc<Texture>]
+    textures: &[Texture]
 ) -> Face {
     Face {
         texture: textures[face.texture_index as usize].clone(),
@@ -213,7 +216,7 @@ fn build_brush(
 
 fn build_leaves<'a>(
     raw: &mut RawBsp,
-    textures: &[Rc<Texture>],
+    textures: &[Texture],
 ) -> Vec<Rc<Leaf>> {
     use itertools::*;
 
@@ -227,11 +230,11 @@ fn build_leaves<'a>(
     let visibility_data = &raw.visibility_data;
     let mesh_verts = &raw.mesh_vertices;
     let clusters = raw.leaves.iter()
-                    .sorted_by(|a, b|
-                        a.visdata_cluster.cmp(&b.visdata_cluster)
-                    )
-                    .into_iter()
-                    .group_by(|l| l.visdata_cluster);
+        .sorted_by(|a, b|
+            a.visdata_cluster.cmp(&b.visdata_cluster)
+        )
+        .into_iter()
+        .group_by(|l| l.visdata_cluster);
     let out = clusters.filter_map(|(cluster, ref group)| {
         if cluster < 0 {
             return None
@@ -364,47 +367,24 @@ fn build_nodes(raw: &mut RawBsp, leaves: &[Rc<Leaf>]) -> Vec<Rc<NonTerminal>> {
 fn build_textures<T: Facade>(
     raw: &[RawTexture],
     builder: &mut TextureBuilder<T>
-) -> Result<Vec<Rc<Texture>>, ()> {
+) -> Result<Vec<Texture>, ()> {
     let texdata = raw.iter()
-        .map(|r| (r.path.clone(), r.surface_flags))
+        .map(|r| r.path.clone())
         .collect::<Vec<_>>();
+    let flags = raw.iter()
+        .map(|r| r.surface_flags);
     let mut out = vec![];
-    for opt in builder.load_async(texdata) {
+    for (opt, f) in
+        builder.load_async(texdata).into_iter()
+            .zip(flags)
+    {
         if let Some(tex) = opt {
-            out.push(tex);
+            out.push(tex.create_texture(f));
         } else {
             return Err(());
         }
     }
     Ok(out)
-}
-
-fn build_textures_sync<T: Facade>(
-    raw: &[RawTexture],
-    builder: &mut TextureBuilder<T>
-) -> Result<Vec<Rc<Texture>>, ()> {
-    let mut out = Vec::with_capacity(raw.len());
-    for res in raw.iter().map(|r| get_texture(r, builder)) {
-        try!(res.map(|t| out.push(t)));
-    }
-    Ok(out)
-}
-
-fn get_texture<T: Facade>(
-    raw: &RawTexture,
-    builder: &mut TextureBuilder<T>
-) -> Result<Rc<Texture>, ()> {
-    builder.load(
-        &raw.path,
-        raw.surface_flags.clone()
-        )
-    .or_else(||
-         builder.load(
-             &"textures/common/missing",
-             raw.surface_flags.clone()
-             )
-        )
-    .ok_or(())
 }
 
 pub fn build_bsp<'a, T: Facade>(
@@ -439,6 +419,7 @@ pub fn build_bsp<'a, T: Facade>(
     )
 }
 
+#[cfg(test)]
 mod test {
     extern crate test;
 
