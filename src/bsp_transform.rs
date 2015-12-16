@@ -369,7 +369,7 @@ fn build_textures<T: Facade>(
         .map(|r| (r.path.clone(), r.surface_flags))
         .collect::<Vec<_>>();
     let mut out = vec![];
-    for opt in builder.load_async(texdata) {
+    for opt in builder.load_async("textures/common/missing".into(), texdata) {
         if let Some(tex) = opt {
             out.push(tex);
         } else {
@@ -419,11 +419,6 @@ pub fn build_bsp<'a, T: Facade>(
         let tex = build_textures(
                 &raw.textures,
                 texture_builder
-            ).or_else(|_|
-                build_textures_sync(
-                    &raw.textures,
-                    texture_builder
-                )
             ).expect("Missing texture is missing");
         println!("End loading textures");
         println!("Start building leaves");

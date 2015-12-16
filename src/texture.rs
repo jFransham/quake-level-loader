@@ -27,15 +27,17 @@ pub struct TextureBuilder<'a, T: Facade + 'a> {
 
 impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     pub fn new<A: Into<PathBuf>, I: IntoIterator<Item=A>>(
-        a: I, facade: &'a T
+        a: I, facade: &'a T, ms: String
     ) -> TextureBuilder<'a, T> {
-        TextureBuilder {
+        let mut out = TextureBuilder {
             roots: Arc::new(
                 a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
             ),
             facade: facade,
             cache: HashMap::new()
-        }
+        };
+        out.load(&ms, SurfaceFlags::empty());
+        out
     }
 
     fn get_real_path_and_ext(
@@ -116,7 +118,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     }
 
     pub fn load_async(
-        &mut self, many: Vec<(String, SurfaceFlags)>
+        &mut self, missing: String, many: Vec<(String, SurfaceFlags)>
     ) -> Vec<Option<Rc<Texture>>> {
         use eventual::*;
         use itertools::*;
@@ -133,8 +135,10 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             .filter_map(|(n, path, flags, opt)|
                 if opt.is_none() {
                     let rclone = self.roots.clone();
+                    let msclone = missing.clone();
                     Some(Future::spawn(move || {
-                        let load = Self::load_inner(rclone, &path);
+                        let load = Self::load_inner(rclone.clone(), &path)
+                            .or_else(|| Self::load_inner(rclone, &msclone));
                         (
                             n,
                             path,
@@ -197,7 +201,6 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             if let Some(tup) = Self::get_real_path_and_ext(&*roots, path) {
                 tup
             } else {
-                println!("{} not found", path);
                 return None
             };
 
