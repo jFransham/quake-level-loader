@@ -3,7 +3,7 @@
 
 use glium::backend::Facade;
 use glium::texture::{Texture2d, RawImage2d};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Weak, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use texture_flags::*;
@@ -44,7 +44,7 @@ pub struct TextureBuilder<'a, T: Facade + 'a> {
     roots: Arc<Vec<PathBuf>>,
     missing: Option<String>,
     facade: &'a T,
-    cache: HashMap<String, Weak<Texture2d>>,
+    cache: Arc<RwLock<HashMap<String, Weak<Texture2d>>>>,
 }
 
 impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
@@ -55,9 +55,26 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             roots: Arc::new(
                 a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
             ),
-            missing: ms.clone(),
+            missing: ms,
             facade: facade,
-            cache: HashMap::new()
+            cache: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn inherit<A: Into<PathBuf>, I: IntoIterator<Item=A>>(
+        parent: &TextureBuilder<'a, T>, a: I
+    ) -> TextureBuilder<'a, T> {
+        TextureBuilder {
+            roots:
+                Arc::new(
+                    parent.roots.iter()
+                        .cloned()
+                        .chain(a.into_iter().map(|e| e.into()))
+                        .collect()
+                ),
+            missing: parent.missing.clone(),
+            facade: parent.facade,
+            cache: parent.cache.clone(),
         }
     }
 
@@ -114,23 +131,23 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         None
     }
 
-    fn find_in_cache(&self, hash: String) -> Option<Arc<Texture2d>> {
-        self.cache.get(&hash).and_then(|weak| weak.upgrade())
-    }
-
     pub fn load(
         &mut self, path: &str
     ) -> Option<Arc<Texture2d>> {
-        self.find_in_cache(path.into()).or_else(||
-            Self::load_inner(self.roots.clone(), path).and_then(|image|
-                Texture2d::new(self.facade, image).ok()
-                    .map(|t| {
-                        let out = Arc::new(t);
-                        self.cache.insert(path.into(), Arc::downgrade(&out));
-                        out
-                    })
+        self.cache.read().unwrap()
+            .get(path)
+            .and_then(|weak| weak.upgrade())
+            .or_else(||
+                Self::load_inner(self.roots.clone(), path).and_then(|image|
+                    Texture2d::new(self.facade, image).ok()
+                        .map(|t| {
+                            let out = Arc::new(t);
+                            self.cache.write().unwrap()
+                                .insert(path.into(), Arc::downgrade(&out));
+                            out
+                        })
+                )
             )
-        )
     }
 
     pub fn load_async(
@@ -139,12 +156,22 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         use eventual::*;
         use itertools::*;
 
-        let cached = many.iter()
-            .enumerate()
-            .map(|(i, path)|
-                (i, path.clone(), self.find_in_cache(path.clone()))
-            )
-            .collect::<Vec<_>>();
+        let cached;
+        {
+            let cache = self.cache.read().unwrap();
+            cached = many.iter()
+                .enumerate()
+                .map(|(i, path)|
+                    (
+                        i,
+                        path.clone(),
+                        cache.get(path).and_then(|weak| weak.upgrade())
+                    )
+                )
+                .collect::<Vec<_>>();
+        }
+
+        let mut cache = self.cache.write().unwrap();
         let promises =
             cached.iter()
             .cloned()
@@ -182,7 +209,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                     Texture2d::new(self.facade, image).ok()
                         .map(|t| {
                             let out = Arc::new(t);
-                            self.cache.insert(path.into(), Arc::downgrade(&out));
+                            cache.insert(path.into(), Arc::downgrade(&out));
                             out
                         })
                 ),
