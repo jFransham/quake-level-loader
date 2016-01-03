@@ -7,7 +7,6 @@ use std::sync::{Arc, Weak, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use texture_flags::*;
-use std::fs::PathExt;
 use image;
 
 #[derive(Debug, Clone)]

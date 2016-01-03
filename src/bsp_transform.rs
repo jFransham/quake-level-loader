@@ -13,7 +13,7 @@ use raw_bsp::*;
 // TODO: Make this return &Leaf instead of Rc<Leaf>
 pub struct Bsp {
     // For caching/etc. needs keep this separate and store indexes only
-    pub vertices: Vec<Vertex>,
+    vertices: Vec<Vertex>,
     root: Rc<NonTerminal>,
 }
 
@@ -23,6 +23,10 @@ impl Bsp {
             vec![],
             |t| self.get_visible_set_of(t)
         )
+    }
+
+    pub fn get_vertices(&self) -> &[Vertex] {
+        &self.vertices
     }
 
     fn new(
@@ -54,6 +58,9 @@ impl Bsp {
                 current.bounds.0.iter(),
                 current.bounds.1.iter()
             ).any(
+                // TODO: make this convert p to an int instead of bounds to
+                //       f32? Would mean that precision is not lost as min,
+                //       max => 2^23
                 |(&p, &min, &max)| p < min as f32 || p > max as f32
             ) {
                 return None;
@@ -116,8 +123,8 @@ pub struct Leaf {
 
 #[derive(Debug)]
 pub struct Face {
-    texture: Texture,
-    render_type: FaceRenderType,
+    pub texture: Texture,
+    pub render_type: FaceRenderType,
 }
 
 #[derive(Debug)]
@@ -132,7 +139,7 @@ pub struct Brush {
 }
 
 #[derive(Debug)]
-enum FaceRenderType {
+pub enum FaceRenderType {
     Patch(Vec<Vec3>),
     Mesh(Vec<usize>),
     Billboard(usize),
@@ -235,6 +242,8 @@ fn build_leaves<'a>(
         )
         .into_iter()
         .group_by(|l| l.visdata_cluster);
+
+    // TODO: do not assume this contains contiguous cluster set?
     let out = clusters.filter_map(|(cluster, ref group)| {
         if cluster < 0 {
             return None
@@ -256,26 +265,31 @@ fn build_leaves<'a>(
             }].iter()
         };
 
-        let faces = group.iter()
+        let (faces, brushes) = group.iter()
             .flat_map(get_faces)
             .map(|lf| lf.index)
+            .sorted_by(|a, b| a.cmp(b))
+            .into_iter()
             .unique()
             .map(|i| &faces[i as usize])
             .map(|f| build_face(f, mesh_verts, textures))
-            .collect::<Vec<_>>();
-        let brushes = group.iter()
-            .flat_map(get_brushes)
-            .map(|lb| lb.index)
-            .unique()
-            .map(|i| &brushes[i as usize])
-            .map(|b| build_brush(
-                    b,
-                    brush_sides,
-                    planes,
-                    raw_textures,
-                )
+            .zip(
+                group.iter()
+                    .flat_map(get_brushes)
+                    .map(|lb| lb.index)
+                    .sorted_by(|a, b| a.cmp(b))
+                    .into_iter()
+                    .unique()
+                    .map(|i| &brushes[i as usize])
+                    .map(|b| build_brush(
+                            b,
+                            brush_sides,
+                            planes,
+                            raw_textures,
+                        )
+                    )
             )
-        .collect::<Vec<_>>();
+            .unzip();
 
         Some(Rc::new(Leaf {
             cluster: cluster as usize,
@@ -296,14 +310,9 @@ fn build_leaves<'a>(
                 start..end
             }]
         ).into_iter()
-            .flat_map(|i| {
-                out.iter()
-                .filter(move |l|
-                    l.cluster == i
-                )
-                .map(|leaf|
-                    Rc::downgrade(&leaf)
-                )
+            .map(|i| {
+                debug_assert_eq!(i, out[i].cluster);
+                Rc::downgrade(&out[i])
             })
             .collect::<Vec<_>>()
     }
@@ -319,11 +328,15 @@ fn get_bsp_tree_node(
 ) -> BspTreeNode {
     if i < 0 {
         let leaf_index = (-i) as usize;
-        let leaf_pntr = leaves.iter()
-            .find(|l|
-                l.cluster == raw_leaves[leaf_index].visdata_cluster as usize
-            );
+        let visdata_cluster = raw_leaves[leaf_index].visdata_cluster;
+        let leaf_pntr = if visdata_cluster >= 0 {
+            leaves.get(visdata_cluster as usize)
+        } else {
+            None
+        };
+
         if let Some(pntr) = leaf_pntr {
+            debug_assert_eq!(pntr.cluster as i32, visdata_cluster);
             BspTreeNode::Leaf(pntr.clone())
         } else {
             BspTreeNode::Empty

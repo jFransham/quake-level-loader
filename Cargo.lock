@@ -3,7 +3,7 @@ name = "quake-level-loader"
 version = "0.1.0"
 dependencies = [
  "bitflags 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
- "eventual 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "eventual 0.1.5 (git+https://github.com/carllerche/eventual)",
  "glium 0.13.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "image 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "itertools 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -161,8 +161,8 @@ dependencies = [
 
 [[package]]
 name = "eventual"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+version = "0.1.5"
+source = "git+https://github.com/carllerche/eventual#611adf7fbc4e8e5a37856e2727b61cd309db5a3d"
 dependencies = [
  "log 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "syncbox 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",

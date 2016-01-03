@@ -108,13 +108,22 @@ pub struct RawBrushSide {
     pub texture_index:i32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct Vertex {
     pub position: Vec3,
     pub surface_coords: Vec2,
     pub lightmap_coords: Vec2,
     pub normal: Vec3,
     pub color: [u8; 4],
+}
+
+implement_vertex! {
+    Vertex,
+    position,
+    surface_coords,
+    lightmap_coords,
+    normal,
+    color,
 }
 
 #[derive(Debug)]
