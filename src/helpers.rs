@@ -31,7 +31,11 @@ pub fn consume_to_vec<T>(
     let mut output = Vec::new();
     let mut bytes: &[u8] = input;
     while bytes.len() > 0 {
-        let (rest, result) = itry!(fun(bytes));
+        // TODO: revert this and use take_until!("\0") in the top-level parser
+        let (rest, result) = match fun(bytes) {
+            Done(i, o) => (i, o),
+            _          => return Done(bytes, output),
+        };
         bytes = rest;
         output.push(result);
     }

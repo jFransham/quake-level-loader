@@ -61,6 +61,7 @@ named! {
 fn parse_entity(i: &[u8]) -> IResult<&[u8], Entity> {
     let (rest, keyvals) = itry!(
         chain!(i,
+                    peek!(none_of!("\0"))      ~
                     whitespace ~
                     char!('{') ~
                     whitespace ~

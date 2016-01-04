@@ -66,22 +66,21 @@ impl Bsp {
                 return None;
             }
 
-            let tmp;
-            {
+            let tmp = {
                 let child =
                     if dot < current.plane.distance {
                         current.back.borrow()
                     } else {
                         current.front.borrow()
                     };
-                tmp = match *child {
+                match *child {
                     BspTreeNode::NonTerminal(ref node_pntr) =>
                         node_pntr.clone(),
                     BspTreeNode::Leaf(ref leaf_pntr) =>
                         return Some(leaf_pntr.clone()),
                     BspTreeNode::Empty => return None,
-                };
-            }
+                }
+            };
 
             current = tmp;
         }
@@ -115,7 +114,7 @@ struct NonTerminal {
 //       so it is safe to send, but the Weak is non-atomic.
 #[derive(Debug)]
 pub struct Leaf {
-    cluster: usize,
+    cluster: isize,
     visdata: RefCell<Vec<Weak<Leaf>>>,
     pub faces: Vec<Face>,
     pub brushes: Vec<Brush>,
@@ -161,23 +160,13 @@ fn build_face(
     Face {
         texture: textures[face.texture_index as usize].clone(),
         render_type: match face.face_type {
-            FaceType::Polygon   =>
-                FaceRenderType::Mesh(
-                    {
-                        let start = face.first_vertex as usize;
-                        let end = start + face.num_vertices as usize;
-                        start..end
-                    }.into_iter()
-                    .collect::<Vec<_>>()
-                ),
-            FaceType::Mesh      =>
+            FaceType::Mesh | FaceType::Polygon =>
                 FaceRenderType::Mesh(
                     {
                         let start = face.first_mesh_vertex as usize;
-                        let end = face.num_mesh_vertices as usize;
+                        let end = start + face.num_mesh_vertices as usize;
                         start..end
-                    }.into_iter()
-                    .map(|i| &mesh_verts[i])
+                    }.map(|i| &mesh_verts[i])
                     .map(|v| v.offset + face.first_vertex)
                     .map(|i| i as usize)
                     .collect::<Vec<_>>()
@@ -243,12 +232,7 @@ fn build_leaves<'a>(
         .into_iter()
         .group_by(|l| l.visdata_cluster);
 
-    // TODO: do not assume this contains contiguous cluster set?
-    let out = clusters.filter_map(|(cluster, ref group)| {
-        if cluster < 0 {
-            return None
-        }
-
+    let mut out = clusters.map(|(cluster, ref group)| {
         // make a closure to not have to deal with iterator adaptor types
         let get_faces = |leaf: &&RawLeaf| {
             leaf_faces[{
@@ -291,30 +275,43 @@ fn build_leaves<'a>(
             )
             .unzip();
 
-        Some(Rc::new(Leaf {
-            cluster: cluster as usize,
-            visdata: RefCell::new(vec![]),
-            faces: faces,
-            brushes: brushes,
-        }))
+        Rc::new(
+            Leaf {
+                cluster: cluster as isize,
+                visdata: RefCell::new(vec![]),
+                faces: faces,
+                brushes: brushes,
+            }
+        )
     })
     .collect::<Vec<_>>();
+
+    let out_of_map = if out[0].cluster < 0 {
+        println!("Some out-of-map leaves");
+        Some(out.remove(0))
+    } else {
+        println!("No out-of-map leaves");
+        None
+    };
 
     for l in &out {
         *l.visdata.borrow_mut() = get_indices(
             &visibility_data.raw_bytes[{
-                let start = l.cluster *
-                    visibility_data.sizeof_vector as usize;
-                let end = start +
-                    visibility_data.sizeof_vector as usize;
+                let start = (l.cluster as usize) * visibility_data.sizeof_vector as usize;
+                let end = start + visibility_data.sizeof_vector as usize;
                 start..end
             }]
         ).into_iter()
             .map(|i| {
-                debug_assert_eq!(i, out[i].cluster);
+                debug_assert_eq!(i as isize, out[i].cluster);
                 Rc::downgrade(&out[i])
             })
+            .chain(out_of_map.clone().map(|l| Rc::downgrade(&l)).into_iter())
             .collect::<Vec<_>>()
+    }
+
+    if let Some(o) = out_of_map {
+        out.push(o);
     }
 
     out
@@ -327,7 +324,7 @@ fn get_bsp_tree_node(
     nodes: &[Rc<NonTerminal>]
 ) -> BspTreeNode {
     if i < 0 {
-        let leaf_index = (-i) as usize;
+        let leaf_index = (-i - 1) as usize;
         let visdata_cluster = raw_leaves[leaf_index].visdata_cluster;
         let leaf_pntr = if visdata_cluster >= 0 {
             leaves.get(visdata_cluster as usize)
@@ -406,8 +403,7 @@ pub fn build_bsp<'a, T: Facade>(
 ) -> (Vec<Entity>, Bsp) {
     let vertices = replace(&mut raw.vertices, vec![]);
     let ents = replace(&mut raw.entities, vec![]);
-    let root;
-    {
+    let root = {
         println!("Start loading textures");
         let tex = build_textures(
                 &raw.textures,
@@ -420,8 +416,8 @@ pub fn build_bsp<'a, T: Facade>(
         println!("Start building nodes");
         let nodes = build_nodes(&mut raw, &leaves);
         println!("End building nodes");
-        root = nodes[0].clone();
-    }
+        nodes[0].clone()
+    };
 
     (
         ents,
