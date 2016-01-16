@@ -1,6 +1,8 @@
 #![cfg_attr(test, feature(test))]
 #![feature(iter_arith)]
 #![feature(time2)]
+#![feature(fnbox)]
+#![feature(step_by)]
 
 #[macro_use]
 extern crate nom;
@@ -17,37 +19,58 @@ extern crate rand;
 
 #[macro_use]
 mod macros;
-mod bsp_transform;
 mod directory_header;
 mod helpers;
+mod bsp;
 mod raw_bsp;
 mod raw_bsp_parsers;
+mod lazy;
 mod texture_flags;
 mod texture;
 
 use nom::IResult::*;
 use raw_bsp_parsers::*;
 use texture::*;
-use bsp_transform::*;
+use texture_flags::*;
+use bsp::*;
 use std::rc::Rc;
+use glium::{
+    Program,
+    BackfaceCullingMode,
+    IndexBuffer,
+    VertexBuffer,
+    DrawParameters,
+    Surface,
+};
+use glium::index::PrimitiveType;
+use glium::backend::Facade;
+use glium::backend::glutin_backend::GlutinFacade;
+use glium::texture::Texture2d;
 
 pub static SIMPLE_DM5: &'static str = "assets/simple-dm5.bsp";
 pub static TRESPASS: &'static str = "assets/trespass.bsp";
 pub static WATER_GIANT: &'static str = "assets/casdm9v1.bsp";
 
-fn get_mesh_verts(leaves: &[Rc<Leaf>]) -> Vec<u16> {
+type Matrix = [[f32; 4]; 4];
+
+/*
+ * fn get_indices_from_leaves(leaves: &[Rc<Leaf>]) -> Vec<u16> {
     leaves.iter()
-        .flat_map(|l|
-            l.faces.iter()
-                .flat_map(|f|
-                    if let FaceRenderType::Mesh(ref v) = f.render_type {
-                        v.clone().into_iter()
-                    } else {
-                        vec![].into_iter()
-                    }
-                )
-                .map(|i| i as u16)
+        .flat_map(|l| get_indices_from_faces(&l.faces))
+        .collect::<Vec<_>>()
+}
+*/
+
+fn get_indices_from_faces(faces: &[&Face]) -> Vec<u16> {
+    faces.iter()
+        .flat_map(|f|
+            if let FaceRenderType::Mesh(ref v) = f.render_type {
+                v.clone().into_iter()
+            } else {
+                vec![].into_iter()
+            }
         )
+        .map(|i| i as u16)
         .collect::<Vec<_>>()
 }
 
@@ -62,27 +85,31 @@ static VERTEX_SHADER_SRC: &'static str = r#"
 
     uniform mat4 u_View;
     uniform mat4 u_Proj;
-    smooth out vec4 col;
+
+    smooth out vec2 tex_coords;
 
     void main() {
         gl_Position = u_Proj * u_View * vec4(position, 1.0);
-        col = vec4((1 - (gl_Position.z / 2048)) * vec3(abs(normal.x), abs(normal.y), abs(normal.z)), 1.0);
+        tex_coords = surface_coords;
     }
 "#;
+
 static FRAGMENT_SHADER_SRC: &'static str = r#"
     #version 140
 
-    in vec4 col;
+    in vec2 tex_coords;
     out vec4 color;
 
+    uniform sampler2D u_Texture;
+
     void main() {
-        color = col;
+        color = texture(u_Texture, tex_coords);
     }
 "#;
 
 fn view_matrix(
     position: &[f32; 3], direction: &[f32; 3], up: &[f32; 3]
-) -> [[f32; 4]; 4] {
+) -> Matrix {
     let f = {
         let f = direction;
         let len = f[0] * f[0] + f[1] * f[1] + f[2] * f[2];
@@ -124,9 +151,8 @@ fn view_matrix(
 
 fn main() {
     use std::time::*;
-    use glium::*;
-    use glium::index::PrimitiveType;
     use glium::glutin::{Event, WindowBuilder};
+    use glium::DisplayBuild;
     use nalgebra::{Vec3, PerspMat3, Rot3};
     use rand::Rng;
 
@@ -145,7 +171,9 @@ fn main() {
         None
     ).unwrap();
 
-    let (mut x, mut y, mut z, mut rotx, mut rotz) = (0f32, 200f32, -100f32, 3.141592 / 2.0, 0f32);
+    let (mut x, mut y, mut z, mut rotxy, mut rotz) = (
+        0f32, 200f32, -100f32, 3.141592 / 2.0, 0f32
+    );
     let mut rng = rand::thread_rng();
     while map.get_visible_set_at([x, y, z]).len() == 0 {
         use rand::distributions::{IndependentSample, Range};
@@ -159,85 +187,97 @@ fn main() {
     let mut acc = 0.001;
 
     let start = Instant::now();
+    let mut last = start.clone();
     let mut period = 0u64;
 
     loop {
-        let mut target = display.draw();
-        let elapsed = Instant::now().duration_from_earlier(start);
+        let now = Instant::now();
+        let elapsed = now.duration_from_earlier(last);
+        /*
+        println!(
+            "{}",
+            1_000_000_000.0 / (
+                elapsed.as_secs() * 1_000_000_000 +
+                    elapsed.subsec_nanos() as u64
+            ) as f64
+        );
+        */
+        last = now;
+
+        let total_elapsed = now.duration_from_earlier(start);
         let elapsed_nano =
-            elapsed.as_secs() * 1_000_000_000 +
-            elapsed.subsec_nanos() as u64;
+            total_elapsed.as_secs() * 1_000_000_000 +
+            total_elapsed.subsec_nanos() as u64;
 
         let perspective = {
-            let (width, height) = target.get_dimensions();
+            let (width, height) = (800, 600);
             let aspect_ratio = height as f32 / width as f32;
 
-            let fov = 3.141592 / 1.5;
-            let zfar = 2048.0;
+            let fov = 3.141592 / 2.0;
+            let zfar = 8192.0 * 8.0;
             let znear = 0.1;
 
             PerspMat3::new(aspect_ratio, fov, znear, zfar)
         };
 
-        let verts = get_mesh_verts(&map.get_visible_set_at([x, y, z]));
-
-        let ibuffer = IndexBuffer::new(
-            &display,
-            PrimitiveType::TrianglesList,
-            &verts,
-        ).unwrap();
-
-        let uniforms = uniform! {
-            u_View: view_matrix(
+        let v: Matrix = view_matrix(
                 &[x, y, z],
                 (
-                    Rot3::new_with_euler_angles(0.0, rotz, rotx) *
-                    Vec3::new(0.0, -1.0, 0.0)
+                    Rot3::new_with_euler_angles(0.0, rotz, rotxy) *
+                        Vec3::new(0.0, -1.0, 0.0)
                 ).as_ref(),
                 (
-                    Rot3::new_with_euler_angles(0.0, rotz, rotx) *
-                    Vec3::new(0.0, 0.0, 1.0)
+                    Rot3::new_with_euler_angles(0.0, rotz, rotxy) *
+                        Vec3::new(0.0, 0.0, 1.0)
                 ).as_ref()
-            ),
-            u_Proj: perspective
-                .to_mat()
-                .as_ref()
-                .clone(),
+            );
+        let p: Matrix = perspective
+            .to_mat()
+            .as_ref()
+            .clone();
+        let uniforms = uniform! {
+            u_View: v,
+            u_Proj: p,
         };
 
-        rotx = elapsed_nano as f32 * 0.0000000002 % (std::f32::consts::PI * 2.0);
+        let leaves = map.get_visible_set_at([x, y, z]);
+        let faces = leaves.iter()
+            .flat_map(|l| &l.faces)
+            .chain(
+                map.get_world().into_iter()
+            )
+            .collect::<Vec<_>>();
+
+        render(
+            &display,
+            &program,
+            p,
+            v,
+            &vbuffer,
+            faces
+        );
+
+        rotxy = elapsed_nano as f32 * 0.0000000002 %
+            (std::f32::consts::PI * 2.0);
 
         let now_period = elapsed_nano / 10_000_000_000;
         if period != now_period {
             loop {
                 use rand::distributions::{IndependentSample, Range};
-                let range = Range::new(-5000.0f32, 5000.0f32);
-                x = range.ind_sample(&mut rng);
-                y = range.ind_sample(&mut rng);
-                z = range.ind_sample(&mut rng);
+                let (mins, maxs) = map.get_bounds();
+                let (range_x, range_y, range_z) = (
+                    Range::new(mins[0] as f32, maxs[0] as f32),
+                    Range::new(mins[1] as f32, maxs[1] as f32),
+                    Range::new(mins[2] as f32, maxs[2] as f32),
+                );
+                x = range_x.ind_sample(&mut rng);
+                y = range_y.ind_sample(&mut rng);
+                z = range_z.ind_sample(&mut rng);
 
                 if map.get_visible_set_at([x, y, z]).len() != 0 { break; }
             }
             period = now_period;
         }
-
-        target.clear_color_and_depth(
-            (100.0 / 255.0, 149.0 / 255.0, 237.0 / 255.0, 1.0),
-            1.0
-        );
-        target.draw(
-            &vbuffer, &ibuffer, &program, &uniforms,
-            &DrawParameters {
-                //backface_culling: BackfaceCullingMode::CullCounterClockwise,
-                depth: glium::Depth {
-                    test: glium::draw_parameters::DepthTest::IfLess,
-                    write: true,
-                    .. Default::default()
-                },
-                .. Default::default()
-            }
-        ).unwrap();
-        target.finish().unwrap();
 
         for ev in display.poll_events() {
             match ev {
@@ -248,17 +288,100 @@ fn main() {
     }
 }
 
-fn get_map<T: glium::backend::Facade>(f: &T) -> bsp_transform::Bsp {
+fn render<'a, I: IntoIterator<Item=&'a Face>>(
+    display: &GlutinFacade,
+    program: &Program,
+    projection: Matrix,
+    view: Matrix,
+    vbuffer: &VertexBuffer<Vertex>,
+    iter: I
+) {
+    use itertools::*;
+    use std::sync::Arc;
+
+    struct ArcCmp<T>(Arc<T>);
+    impl<T> PartialEq<ArcCmp<T>> for ArcCmp<T> {
+        fn eq(&self, other: &ArcCmp<T>) -> bool {
+            (self.0.as_ref() as *const _) == (other.0.as_ref() as *const _)
+        }
+    }
+
+    let buffers = iter.into_iter()
+        .sorted_by(|a, b|
+            (a.texture.texture.as_ref() as *const _).cmp(
+                &(b.texture.texture.as_ref() as *const _)
+            )
+        )
+        .into_iter()
+        .group_by(|f| ArcCmp(f.texture.texture.clone()))
+        .into_iter()
+        .map(|(ArcCmp(tex), faces)|
+            (
+                tex,
+                IndexBuffer::new(
+                    display,
+                    PrimitiveType::TrianglesList,
+                    &get_indices_from_faces(&faces)
+                ).unwrap()
+            )
+        );
+
+    let mut target = display.draw();
+
+    target.clear_depth(1.0);
+
+    for (t, b) in buffers {
+        let uniforms = uniform! {
+            u_View: view,
+            u_Proj: projection,
+            u_Texture: &*t,
+        };
+
+        render_one(
+            &mut target,
+            program,
+            uniforms,
+            vbuffer,
+            &b
+        );
+    }
+
+    target.finish().unwrap();
+}
+
+fn render_one<U: glium::uniforms::Uniforms, S: glium::Surface>(
+    s: &mut S,
+    program: &Program,
+    uniforms: U,
+    vbuffer: &VertexBuffer<Vertex>,
+    ibuffer: &IndexBuffer<u16>
+) -> Result<(), glium::DrawError> {
+    s.draw(
+        vbuffer, ibuffer, program, &uniforms,
+        &DrawParameters {
+            backface_culling: BackfaceCullingMode::CullCounterClockwise,
+            depth: glium::Depth {
+                test: glium::draw_parameters::DepthTest::IfLess,
+                write: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    )
+}
+
+fn get_map<T: Facade>(f: &T) -> Bsp {
     let mut builder =
         TextureBuilder::new(
             vec!["assets/trespass"],
             f,
             Some("textures/common/missing".into())
         );
-    match parse_raw_bsp(&load_all("assets/sr3dm10a.bsp")) {
+
+    match parse_raw_bsp(&load_all("assets/q3dm11.bsp")) {
         Done(e, bsp)  => {
             // Ignore entities for now
-            let b = bsp_transform::build_bsp(
+            let b = from_raw(
                 bsp,
                 &mut builder
             );

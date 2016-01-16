@@ -1,147 +1,112 @@
 use std::mem::replace;
 use std::rc::{Rc, Weak};
 use std::cell::RefCell;
+use std::boxed::FnBox;
+use std::iter::IntoIterator;
 use glium::backend::Facade;
+use glium::texture::Texture2d;
+use lazy::Lazy;
+use itertools::*;
 use texture_flags::*;
 use texture::*;
 use helpers::*;
 use raw_bsp::*;
+use super::{
+    Bsp,
+    BspTreeNode,
+    NonTerminal,
+    Leaf,
+    Face,
+    Model,
+    Surface,
+    Brush,
+    PatchData,
+    FaceRenderType,
+    MIN_PATCH_SUBDIVISION_LEVELS,
+    MAX_PATCH_SUBDIVISION_LEVELS,
+};
+use nalgebra;
 
 // TODO: IMPORTANT HOLY SHIT 𝘋𝘖 𝘕𝘖𝘛 𝘍𝘖𝘙𝘎𝘌𝘛!
 //       Remove all uses of [] & use try!(_.get(_)) instead
 
-// TODO: Make this return &Leaf instead of Rc<Leaf>
-pub struct Bsp {
-    // For caching/etc. needs keep this separate and store indexes only
-    vertices: Vec<Vertex>,
-    root: Rc<NonTerminal>,
-}
+fn get_tessellate_fn(
+    control_points: Rc<[Vertex; 9]>,
+    level: usize
+) -> Box<FnBox() -> (Vec<Vertex>, Vec<u16>)> {
+    let v_per_side = level + 1;
+    let float_lvl = level as f32;
 
-impl Bsp {
-    pub fn get_visible_set_at(&self, point: Vec3) -> Vec<Rc<Leaf>> {
-        self.get_terminal_at(point).map_or(
-            vec![],
-            |t| self.get_visible_set_of(t)
-        )
+    fn nvec3(v: &Vec3) -> nalgebra::Vec3<f32> {
+        nalgebra::Vec3::new(v[0], v[1], v[2])
     }
 
-    pub fn get_vertices(&self) -> &[Vertex] {
-        &self.vertices
-    }
+    Box::new(move || {
+        println!("Running: {}", level);
+        let vertices = (0..v_per_side).map(|i| {
+            let a = (i as f32) / float_lvl;
+            let b = 1.0 - a;
 
-    fn new(
-        root: NonTerminal,
-        verts: Vec<Vertex>
-    ) -> Bsp {
-        Bsp {
-            vertices: verts,
-            root: Rc::new(root),
-        }
-    }
+            nvec3(&control_points[0].position) * (b * b) +
+                nvec3(&control_points[3].position) * (2.0 * b * a) +
+                nvec3(&control_points[6].position) * (a * a)
+        }).chain(
+            (1..v_per_side).flat_map(|i| {
+                let a = (i as f32) / float_lvl;
+                let b = 1.0 - a;
 
-    fn get_surfaces_between(
-        &self, bounds: (Vec3, Vec3)
-    ) -> Vec<&Surface> {
-        unimplemented!()
-    }
+                let temp = to_3_arr! {
+                    (0..3).map(|i| {
+                        let k = 3usize * i;
+                        nvec3(&control_points[k].position) * (b*b) +
+                            nvec3(&control_points[k + 1].position) * (2.0*b*a) +
+                            nvec3(&control_points[k + 2].position) * (a*a)
+                    })
+                };
 
-    fn get_terminal_at(&self, point: Vec3) -> Option<Rc<Leaf>> {
-        let mut current = self.root.clone();
-        loop {
-            let dot = point.iter()
-                .zip(current.plane.normal.iter())
-                .map(|(a, b)| a * b)
-                .sum::<f32>();
+                (0..v_per_side).map(|j| {
+                    let a = (j as f32) / float_lvl;
+                    let b = 1.0 - a;
 
-            if izip!(
-                point.iter(),
-                current.bounds.0.iter(),
-                current.bounds.1.iter()
-            ).any(
-                // TODO: make this convert p to an int instead of bounds to
-                //       f32? Would mean that precision is not lost as min,
-                //       max => 2^23
-                |(&p, &min, &max)| p < min as f32 || p > max as f32
-            ) {
-                return None;
+                    temp[0] * (b * b) +
+                        temp[1] * (2.0 * b * a) +
+                        temp[2] * (a * a)
+                }).collect::<Vec<_>>()
+            })
+        ).map(|v|
+            Vertex {
+                position: [v.x, v.y, v.z],
+                ..control_points[0].clone()
             }
+        ).collect::<Vec<_>>();
 
-            let tmp = {
-                let child =
-                    if dot < current.plane.distance {
-                        current.back.borrow()
-                    } else {
-                        current.front.borrow()
-                    };
-                match *child {
-                    BspTreeNode::NonTerminal(ref node_pntr) =>
-                        node_pntr.clone(),
-                    BspTreeNode::Leaf(ref leaf_pntr) =>
-                        return Some(leaf_pntr.clone()),
-                    BspTreeNode::Empty => return None,
-                }
-            };
-
-            current = tmp;
-        }
-    }
-
-    fn get_visible_set_of(&self, leaf: Rc<Leaf>) -> Vec<Rc<Leaf>> {
-        let mut out = leaf.visdata.borrow().iter()
-            .filter_map(|i| i.upgrade())
+        let indices = (0..level-1)
+            .step_by(v_per_side)
+            .cartesian_product(0..v_per_side)
+            .flat_map(|(row, col)|
+                vec![
+                    row + col + 2 * v_per_side,
+                    row + col + v_per_side,
+                    row + col,
+                ]
+            )
+            .map(|i| i as u16)
             .collect::<Vec<_>>();
-        out.push(leaf);
-        out
-    }
+
+        (vertices, indices)
+    })
 }
 
-#[derive(Debug)]
-enum BspTreeNode {
-    NonTerminal(Rc<NonTerminal>),
-    Leaf(Rc<Leaf>),
-    Empty,
-}
+fn get_patch_data(control_points: [Vertex; 9]) -> PatchData {
+    let count_ctrl = Rc::new(control_points);
 
-#[derive(Debug)]
-struct NonTerminal {
-    plane: Plane,
-    bounds: (IVec3, IVec3),
-    front: RefCell<BspTreeNode>,
-    back: RefCell<BspTreeNode>,
-}
+    let subs = to_8_arr! {
+        (MIN_PATCH_SUBDIVISION_LEVELS..MAX_PATCH_SUBDIVISION_LEVELS).map(|i|
+            Lazy::new(get_tessellate_fn(count_ctrl.clone(), i))
+        )
+    };
 
-// TODO: Make this thread-safe. RefCell is only referenced on initialisation
-//       so it is safe to send, but the Weak is non-atomic.
-#[derive(Debug)]
-pub struct Leaf {
-    cluster: isize,
-    visdata: RefCell<Vec<Weak<Leaf>>>,
-    pub faces: Vec<Face>,
-    pub brushes: Vec<Brush>,
-}
-
-#[derive(Debug)]
-pub struct Face {
-    pub texture: Texture,
-    pub render_type: FaceRenderType,
-}
-
-#[derive(Debug)]
-struct Surface {
-    plane: Plane,
-    surface_flags: SurfaceFlags,
-}
-#[derive(Debug)]
-pub struct Brush {
-    surfaces: Vec<Surface>,
-    content_flags: ContentFlags,
-}
-
-#[derive(Debug)]
-pub enum FaceRenderType {
-    Patch(Vec<Vec3>),
-    Mesh(Vec<usize>),
-    Billboard(usize),
+    PatchData(subs)
 }
 
 fn get_indices(visdata: &[u8]) -> Vec<usize> {
@@ -155,10 +120,17 @@ fn get_indices(visdata: &[u8]) -> Vec<usize> {
 fn build_face(
     face: &RawFace,
     mesh_verts: &[RawMeshVertex],
-    textures: &[Texture]
+    verts: &[Vertex],
+    textures: &[Texture],
+    lightmaps: &[Rc<Texture2d>]
 ) -> Face {
     Face {
         texture: textures[face.texture_index as usize].clone(),
+        lightmap: if face.lightmap_index < 0 {
+            None
+        } else {
+            Some(lightmaps[face.lightmap_index as usize].clone())
+        },
         render_type: match face.face_type {
             FaceType::Mesh | FaceType::Polygon =>
                 FaceRenderType::Mesh(
@@ -173,7 +145,19 @@ fn build_face(
                 ),
             FaceType::Patch     =>
                 FaceRenderType::Patch(
-                    vec![] // TODO: make this work
+                    (0..(face.size[0] - 1) as usize / 2)
+                        .cartesian_product(0..(face.size[1] - 1) as usize / 2)
+                        .map(|(x, y)| {
+                            to_9_arr! {
+                                get_offset_grid(x, y, face.size[0] as usize)
+                                    .into_iter()
+                                    .map(|i| &verts[*i])
+                                    .map(|v| v.clone())
+                                    .collect::<Vec<_>>()
+                            }
+                        })
+                        .map(get_patch_data)
+                        .collect::<Vec<_>>()
                 ),
             FaceType::Billboard =>
                 FaceRenderType::Billboard(
@@ -181,6 +165,41 @@ fn build_face(
                 ),
         },
     }
+}
+
+fn build_model(
+    mdl: &RawModel,
+    faces: &[RawFace],
+    mesh_verts: &[RawMeshVertex],
+    verts: &[Vertex],
+    textures: &[Texture],
+    lightmaps: &[Rc<Texture2d>]
+) -> Model {
+    let faces = {
+        let start = mdl.first_face as usize;
+        let end = start + mdl.num_faces as usize;
+        start..end
+    }
+    .map(|i| &faces[i])
+    .map(|f| build_face(f, mesh_verts, verts, textures, lightmaps))
+    .collect::<Vec<_>>();
+
+    Model {
+        min: mdl.min,
+        max: mdl.max,
+        faces: faces,
+        brushes: vec![], // TODO: unimplemented
+    }
+}
+
+fn get_offset_grid(x: usize, y: usize, width: usize) -> [usize; 9] {
+    let (x, y) = (x*2, y*2);
+
+    [
+        x + y * width, x + y * width + 1, x + y * width + 2,
+        x + (y+1) * width, x + (y+1) * width + 1, x + (y+1) * width + 2,
+        x + (y+2) * width, x + (y+2) * width + 1, x + (y+2) * width + 2,
+    ]
 }
 
 fn build_brush(
@@ -210,9 +229,10 @@ fn build_brush(
     }
 }
 
-fn build_leaves<'a>(
-    raw: &mut RawBsp,
+fn build_leaves(
+    raw: &RawBsp,
     textures: &[Texture],
+    lightmaps: &[Rc<Texture2d>]
 ) -> Vec<Rc<Leaf>> {
     use itertools::*;
 
@@ -225,6 +245,7 @@ fn build_leaves<'a>(
     let raw_textures = &raw.textures;
     let visibility_data = &raw.visibility_data;
     let mesh_verts = &raw.mesh_vertices;
+    let verts = &raw.vertices;
     let clusters = raw.leaves.iter()
         .sorted_by(|a, b|
             a.visdata_cluster.cmp(&b.visdata_cluster)
@@ -233,7 +254,6 @@ fn build_leaves<'a>(
         .group_by(|l| l.visdata_cluster);
 
     let mut out = clusters.map(|(cluster, ref group)| {
-        // make a closure to not have to deal with iterator adaptor types
         let get_faces = |leaf: &&RawLeaf| {
             leaf_faces[{
                 let start = leaf.first_leaf_face as usize;
@@ -252,16 +272,16 @@ fn build_leaves<'a>(
         let (faces, brushes) = group.iter()
             .flat_map(get_faces)
             .map(|lf| lf.index)
-            .sorted_by(|a, b| a.cmp(b))
+            .sorted_by(i32::cmp)
             .into_iter()
             .unique()
             .map(|i| &faces[i as usize])
-            .map(|f| build_face(f, mesh_verts, textures))
+            .map(|f| build_face(f, mesh_verts, verts, textures, lightmaps))
             .zip(
                 group.iter()
                     .flat_map(get_brushes)
                     .map(|lb| lb.index)
-                    .sorted_by(|a, b| a.cmp(b))
+                    .sorted_by(i32::cmp)
                     .into_iter()
                     .unique()
                     .map(|i| &brushes[i as usize])
@@ -286,18 +306,18 @@ fn build_leaves<'a>(
     })
     .collect::<Vec<_>>();
 
-    let out_of_map = if out[0].cluster < 0 {
+    if out[0].cluster < 0 {
         println!("Some out-of-map leaves");
-        Some(out.remove(0))
+        out.remove(0);
     } else {
         println!("No out-of-map leaves");
-        None
-    };
+    }
 
     for l in &out {
         *l.visdata.borrow_mut() = get_indices(
             &visibility_data.raw_bytes[{
-                let start = (l.cluster as usize) * visibility_data.sizeof_vector as usize;
+                let start = (l.cluster as usize) *
+                    visibility_data.sizeof_vector as usize;
                 let end = start + visibility_data.sizeof_vector as usize;
                 start..end
             }]
@@ -306,12 +326,7 @@ fn build_leaves<'a>(
                 debug_assert_eq!(i as isize, out[i].cluster);
                 Rc::downgrade(&out[i])
             })
-            .chain(out_of_map.clone().map(|l| Rc::downgrade(&l)).into_iter())
-            .collect::<Vec<_>>()
-    }
-
-    if let Some(o) = out_of_map {
-        out.push(o);
+            .collect::<Vec<_>>();
     }
 
     out
@@ -326,14 +341,9 @@ fn get_bsp_tree_node(
     if i < 0 {
         let leaf_index = (-i - 1) as usize;
         let visdata_cluster = raw_leaves[leaf_index].visdata_cluster;
-        let leaf_pntr = if visdata_cluster >= 0 {
-            leaves.get(visdata_cluster as usize)
-        } else {
-            None
-        };
 
-        if let Some(pntr) = leaf_pntr {
-            debug_assert_eq!(pntr.cluster as i32, visdata_cluster);
+        if visdata_cluster >= 0 {
+            let pntr = &leaves[visdata_cluster as usize];
             BspTreeNode::Leaf(pntr.clone())
         } else {
             BspTreeNode::Empty
@@ -397,32 +407,66 @@ fn build_textures<T: Facade>(
     Ok(out)
 }
 
-pub fn build_bsp<'a, T: Facade>(
+fn build_lightmaps<T: Facade>(
+    builder: &mut TextureBuilder<T>,
+    lightmaps: Vec<Lightmap>
+) -> Vec<Rc<Texture2d>> {
+    lightmaps.into_iter()
+        .map(|l|
+            l.colors
+        )
+        .map(|c|
+            c.into_iter().map(|r|
+                r.into_iter().map(|rgb|
+                    (rgb[0], rgb[1], rgb[2])
+                )
+                .collect::<Vec<_>>()
+            )
+            .collect::<Vec<_>>()
+        )
+        .map(|d|
+             Rc::new(builder.create_raw(d).unwrap())
+        )
+        .collect()
+}
+
+pub fn build_bsp<T: Facade>(
     mut raw: RawBsp,
     texture_builder: &mut TextureBuilder<T>
 ) -> (Vec<Entity>, Bsp) {
+    let tex = build_textures(
+        &raw.textures,
+        texture_builder
+    ).expect("Missing texture is missing");
+
+    let raw_lightmaps = replace(&mut raw.light_maps, vec![]);
+    let lightmaps = build_lightmaps(texture_builder, raw_lightmaps);
+
+    let root = {
+        let leaves = build_leaves(&mut raw, &tex, &lightmaps);
+        let mut nodes = build_nodes(&mut raw, &leaves);
+        nodes.remove(0)
+    };
+
     let vertices = replace(&mut raw.vertices, vec![]);
     let ents = replace(&mut raw.entities, vec![]);
-    let root = {
-        println!("Start loading textures");
-        let tex = build_textures(
-                &raw.textures,
-                texture_builder
-            ).expect("Missing texture is missing");
-        println!("End loading textures");
-        println!("Start building leaves");
-        let leaves = build_leaves(&mut raw, &tex);
-        println!("End building leaves");
-        println!("Start building nodes");
-        let nodes = build_nodes(&mut raw, &leaves);
-        println!("End building nodes");
-        nodes[0].clone()
-    };
+
+    let world = build_model(
+        &raw.models[0],
+        &raw.faces,
+        &raw.mesh_vertices,
+        &vertices,
+        &tex,
+        &lightmaps
+    );
 
     (
         ents,
         Bsp::new(
-            Rc::try_unwrap(root).expect("Bsp has circular nodegraph"),
+            Rc::try_unwrap(root).unwrap_or_else(|_|
+                panic!("Bsp has circular nodegraph")
+            ),
+            world,
             vertices
         )
     )

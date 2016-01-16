@@ -2,7 +2,12 @@
 //       load Texture2d's instead.
 
 use glium::backend::Facade;
-use glium::texture::{Texture2d, RawImage2d};
+use glium::texture::{
+    Texture2dDataSource,
+    Texture2d,
+    RawImage2d,
+    TextureCreationError,
+};
 use std::sync::{Arc, Weak, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,8 +16,8 @@ use image;
 
 #[derive(Debug, Clone)]
 pub struct Texture {
-    texture: Arc<Texture2d>,
-    surface_flags: SurfaceFlags,
+    pub texture: Arc<Texture2d>,
+    pub surface_flags: SurfaceFlags,
 }
 
 pub trait CreateTexture {
@@ -41,7 +46,7 @@ impl CreateTexture for Texture2d {
 //          inherit(texturebuilder, pathbuf)
 pub struct TextureBuilder<'a, T: Facade + 'a> {
     roots: Arc<Vec<PathBuf>>,
-    missing: Option<String>,
+    missing: Option<Arc<Texture2d>>,
     facade: &'a T,
     cache: Arc<RwLock<HashMap<String, Weak<Texture2d>>>>,
 }
@@ -50,14 +55,26 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
     pub fn new<A: Into<PathBuf>, I: IntoIterator<Item=A>>(
         a: I, facade: &'a T, ms: Option<String>
     ) -> TextureBuilder<'a, T> {
+        let r = Arc::new(
+            a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
+        );
+
         TextureBuilder {
-            roots: Arc::new(
-                a.into_iter().map(|e| e.into()).collect::<Vec<_>>()
-            ),
-            missing: ms,
+            roots: r.clone(),
+            missing: ms
+                .and_then(|p| Self::load_inner(r, &p))
+                .and_then(|t| Texture2d::new(facade, t).ok())
+                .map(|t| Arc::new(t)),
             facade: facade,
             cache: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub fn create_raw<'b, S: Texture2dDataSource<'b>>(
+        &self,
+        d: S
+    ) -> Result<Texture2d, TextureCreationError> {
+        Texture2d::new(self.facade, d)
     }
 
     pub fn inherit<A: Into<PathBuf>, I: IntoIterator<Item=A>>(
@@ -177,14 +194,8 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
             .filter_map(|(n, path, opt)|
                 if opt.is_none() {
                     let rclone = self.roots.clone();
-                    let msclone = self.missing.clone();
                     Some(Future::spawn(move || {
-                        let load = Self::load_inner(rclone.clone(), &path)
-                            .or_else(||
-                                msclone.and_then(|inner|
-                                    Self::load_inner(rclone, &inner)
-                                )
-                            );
+                        let load = Self::load_inner(rclone.clone(), &path);
                         (
                             n,
                             path,
@@ -211,7 +222,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                             cache.insert(path.into(), Arc::downgrade(&out));
                             out
                         })
-                ),
+                ).or_else(|| self.missing.clone()),
             )
         )
         .collect::<Vec<_>>();
@@ -260,6 +271,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                 return None
             };
         let image_dimensions = raw.dimensions();
+        println!("Loaded {}", path);
         Some(
             RawImage2d::from_raw_rgba_reversed(
                 raw.into_raw(), image_dimensions

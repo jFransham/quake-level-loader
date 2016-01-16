@@ -1,12 +1,13 @@
 # Quake 3 level viewer in Rust
 
-This is mostly an attempt to wrangle the pointer-arithmetic-based, low-memory-
-footprint-oriented BSP file format into something more ideomatically Rustic.
-Includes decent texture caching (although work is duplicated if multiple copies
-of the same texture are requested simultaneously, this can definitely be
-improved) and super fast initial parsing speeds (before transformation - thanks
-[Nom](https://github.com/Geal/nom)!). Currently, transformation of the BSP tree
-into an ideomatic data structure is by far the biggest performance hit.
+This is mostly an attempt to wrangle the pointer-arithmetic-based,
+low-memory-footprint-oriented BSP file format into something more ideomatically
+Rustic. Includes decent texture caching (although work is duplicated if multiple
+copies of the same texture are requested simultaneously, this can definitely be
+improved) and super fast parsing speeds, as well as rendering for Polygons and
+Meshes (next step: rendering patches, which Quake 3 likes to use for absolutely
+everything). This has so far been a really fun project, and I'm excited to see
+where it goes.
 
 Note: if you're thinking of using this in a game project: don't. It isn't ready
 and if you want to make a 3D game in Piston then you are more than foolhardy

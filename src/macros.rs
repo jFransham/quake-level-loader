@@ -1,3 +1,40 @@
+macro_rules! to_3_arr {
+    ($itr:expr) => {{
+        let mut i = $itr.into_iter();
+
+        [
+            i.next().unwrap(),
+            i.next().unwrap(),
+            i.next().unwrap(),
+        ]
+    }};
+}
+
+macro_rules! to_8_arr {
+    ($itr:expr) => {{
+        let mut i = $itr.into_iter();
+
+        [
+            i.next().unwrap(), i.next().unwrap(),
+            i.next().unwrap(), i.next().unwrap(),
+            i.next().unwrap(), i.next().unwrap(),
+            i.next().unwrap(), i.next().unwrap(),
+        ]
+    }};
+}
+
+macro_rules! to_9_arr {
+    ($itr:expr) => {{
+        let mut i = $itr.into_iter();
+        [
+            i.next().unwrap(), i.next().unwrap(), i.next().unwrap(),
+            i.next().unwrap(), i.next().unwrap(), i.next().unwrap(),
+            i.next().unwrap(), i.next().unwrap(), i.next().unwrap(),
+        ]
+    }};
+}
+
+
 macro_rules! itry {
     ($res:expr) => {
         match $res {
