@@ -57,3 +57,15 @@ bitflags! {
         const DUST =          0x40000, // leave a dust trail when walking on this surface
     }
 }
+
+pub trait Draw {
+    fn should_draw(&self) -> bool;
+}
+
+impl Draw for SurfaceFlags {
+    fn should_draw(&self) -> bool {
+        !self.intersects(
+            HINT | SKIP | NODRAW | LIGHTFILTER
+        )
+    }
+}

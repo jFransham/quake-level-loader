@@ -3,6 +3,8 @@
 #![feature(time2)]
 #![feature(fnbox)]
 #![feature(step_by)]
+#![feature(unboxed_closures)]
+#![feature(fn_traits)]
 
 #[macro_use]
 extern crate nom;
@@ -36,10 +38,8 @@ use bsp::*;
 use std::rc::Rc;
 use glium::{
     Program,
-    BackfaceCullingMode,
     IndexBuffer,
     VertexBuffer,
-    DrawParameters,
     Surface,
 };
 use glium::index::PrimitiveType;
@@ -97,13 +97,13 @@ static VERTEX_SHADER_SRC: &'static str = r#"
 static FRAGMENT_SHADER_SRC: &'static str = r#"
     #version 140
 
-    in vec2 tex_coords;
+    smooth in vec2 tex_coords;
     out vec4 color;
 
     uniform sampler2D u_Texture;
 
     void main() {
-        color = texture(u_Texture, tex_coords);
+        color = texture(u_Texture, vec2(1 - tex_coords.x, 1 - tex_coords.y));
     }
 "#;
 
@@ -313,6 +313,7 @@ fn render<'a, I: IntoIterator<Item=&'a Face>>(
             )
         )
         .into_iter()
+        .filter(|f| f.texture.surface_flags.should_draw())
         .group_by(|f| ArcCmp(f.texture.texture.clone()))
         .into_iter()
         .map(|(ArcCmp(tex), faces)|
@@ -356,12 +357,15 @@ fn render_one<U: glium::uniforms::Uniforms, S: glium::Surface>(
     vbuffer: &VertexBuffer<Vertex>,
     ibuffer: &IndexBuffer<u16>
 ) -> Result<(), glium::DrawError> {
+    use glium::draw_parameters::*;
+
     s.draw(
         vbuffer, ibuffer, program, &uniforms,
         &DrawParameters {
             backface_culling: BackfaceCullingMode::CullCounterClockwise,
-            depth: glium::Depth {
-                test: glium::draw_parameters::DepthTest::IfLess,
+            smooth: Some(Smooth::Nicest),
+            depth: Depth {
+                test: DepthTest::IfLess,
                 write: true,
                 ..Default::default()
             },
@@ -373,7 +377,7 @@ fn render_one<U: glium::uniforms::Uniforms, S: glium::Surface>(
 fn get_map<T: Facade>(f: &T) -> Bsp {
     let mut builder =
         TextureBuilder::new(
-            vec!["assets/trespass"],
+            vec!["assets", "assets/trespass", "assets/Casdm9v1"],
             f,
             Some("textures/common/missing".into())
         );
@@ -436,3 +440,4 @@ mod test_main {
         });
     }
 }
+

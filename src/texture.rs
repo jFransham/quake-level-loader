@@ -12,12 +12,46 @@ use std::sync::{Arc, Weak, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use texture_flags::*;
+use lazy::Lazy;
 use image;
 
 #[derive(Debug, Clone)]
 pub struct Texture {
     pub texture: Arc<Texture2d>,
     pub surface_flags: SurfaceFlags,
+}
+
+impl Texture {
+    fn texture(&self) -> Arc<Texture2d> {
+        self.texture.clone()
+    }
+
+    fn surface_flags(&self) -> SurfaceFlags {
+        self.surface_flags.clone()
+    }
+}
+
+#[derive(Clone)]
+pub enum TextureThunk<'a, T: Facade + 'a> {
+    Cached(Arc<Texture2d>),
+    Load(Arc<Vec<PathBuf>>, &'a str, &'a T),
+}
+
+impl<'a, T: Facade + 'a> FnOnce<()> for TextureThunk<'a, T> {
+    type Output = Arc<Texture2d>;
+
+    extern "rust-call" fn call_once(self, args: ()) -> Self::Output {
+        use self::TextureThunk::*;
+
+        unreachable!()
+        /*match self {
+            Cached(t) => t,
+            Load(roots, path, fc) =>
+                TextureBuilder::load_inner(roots, path).and_then(|image|
+                    Texture2d::new(fc, image).ok().map(Arc::new)
+                ).unwrap(),
+        }*/
+    }
 }
 
 pub trait CreateTexture {
@@ -126,9 +160,9 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         }
 
         for root in roots {
-            let root: PathBuf = root.join(path);
+            let r2: PathBuf = root.join(path);
             let file_name: String =
-                if let Some(Some(f)) = root.file_name().map(|o| o.to_str()) {
+                if let Some(Some(f)) = r2.file_name().map(|o| o.to_str()) {
                     f.into()
                 } else {
                     return None
@@ -137,7 +171,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                 let extensions = get_extensions(&ex);
 
                 for str_ex in extensions {
-                    let out = root.with_file_name(format!("{}.{}", file_name, str_ex));
+                    let out = r2.with_file_name(format!("{}.{}", file_name, str_ex));
 
                     if out.is_file() { return Some((*ex, out.to_path_buf())); }
                 }
@@ -172,10 +206,9 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
         use eventual::*;
         use itertools::*;
 
-        let cached;
-        {
+        let cached = {
             let cache = self.cache.read().unwrap();
-            cached = many.iter()
+            many.iter()
                 .enumerate()
                 .map(|(i, path)|
                     (
@@ -184,8 +217,8 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                         cache.get(path).and_then(|weak| weak.upgrade())
                     )
                 )
-                .collect::<Vec<_>>();
-        }
+                .collect::<Vec<_>>()
+        };
 
         let mut cache = self.cache.write().unwrap();
         let promises =
@@ -207,6 +240,7 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                 }
             )
             .collect::<Vec<_>>();
+
         let textures = join(
             promises
         ).await()
@@ -219,10 +253,13 @@ impl<'a, T: Facade + 'a> TextureBuilder<'a, T> {
                     Texture2d::new(self.facade, image).ok()
                         .map(|t| {
                             let out = Arc::new(t);
-                            cache.insert(path.into(), Arc::downgrade(&out));
+                            cache.insert(path.clone().into(), Arc::downgrade(&out));
                             out
                         })
-                ).or_else(|| self.missing.clone()),
+                ).or_else(|| {
+                    println!("Cannot load {}", path.clone());
+                    self.missing.clone()
+                }),
             )
         )
         .collect::<Vec<_>>();
